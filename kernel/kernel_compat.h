@@ -44,4 +44,13 @@ static long ksu_copy_from_user_retry(void *to,
 #define TWA_NONE false
 #endif
 
+#ifndef strncpy_from_user_nofault
+static inline long strncpy_from_user_nofault(char *dst,
+                                             const char __user *src,
+                                             long count)
+{
+    return strncpy_from_user(dst, src, count);
+}
+#endif
+
 #endif
