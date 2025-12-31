@@ -1,6 +1,7 @@
 #include <linux/uaccess.h>
 #include <linux/types.h>
 #include <linux/version.h>
+#include <linux/printk.h>
 
 #include "../klog.h" // IWYU pragma: keep
 #include "selinux.h"
@@ -8,6 +9,7 @@
 #include "ss/services.h"
 #include "linux/lsm_audit.h" // IWYU pragma: keep
 #include "xfrm.h"
+#include "../../../security/selinux/include/security.h"
 
 #define SELINUX_POLICY_INSTEAD_SELINUX_SS
 
@@ -15,10 +17,9 @@
 
 static struct policydb *get_policydb(void)
 {
-    struct policydb *db;
-    struct selinux_policy *policy = selinux_state.policy;
-    db = &policy->policydb;
-    return db;
+    if (!selinux_state.ss)
+        return NULL;
+    return &selinux_state.ss->policydb;
 }
 
 static DEFINE_MUTEX(ksu_rules);
@@ -34,6 +35,10 @@ void apply_kernelsu_rules()
     mutex_lock(&ksu_rules);
 
     db = get_policydb();
+    if (!db) {
+        pr_warn("selinux policy db unavailable\n");
+        goto out;
+    }
 
     ksu_permissive(db, KERNEL_SU_DOMAIN);
     ksu_typeattribute(db, KERNEL_SU_DOMAIN, "mlstrustedsubject");
@@ -98,6 +103,7 @@ void apply_kernelsu_rules()
     // https://android-review.googlesource.com/c/platform/system/logging/+/3725346
     ksu_dontaudit(db, "untrusted_app", KERNEL_SU_DOMAIN, "dir", "getattr");
 
+out:
     mutex_unlock(&ksu_rules);
 }
 
