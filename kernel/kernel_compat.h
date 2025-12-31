@@ -3,7 +3,17 @@
 
 #include <linux/fs.h>
 #include <linux/task_work.h>
+#include <linux/uaccess.h>
+#include <linux/sched/task.h>
 #include <linux/version.h>
+
+#ifndef copy_from_user_nofault
+static inline long copy_from_user_nofault(void *to, const void __user *from,
+                                          unsigned long n)
+{
+    return copy_from_user(to, from, n);
+}
+#endif
 
 /*
  * ksu_copy_from_user_retry
