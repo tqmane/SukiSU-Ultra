@@ -386,11 +386,11 @@ static int do_get_wrapper_fd(void __user *arg) {
     }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
-#define getfd_secure anon_inode_create_getfd
+    ret = anon_inode_create_getfd("[ksu_fdwrapper]", &data->ops, data,
+                                  f->f_flags, NULL);
 #else
-#define getfd_secure anon_inode_getfd
+    ret = anon_inode_getfd("[ksu_fdwrapper]", &data->ops, data, f->f_flags);
 #endif
-    ret = getfd_secure("[ksu_fdwrapper]", &data->ops, data, f->f_flags, NULL);
     if (ret < 0) {
         pr_err("ksu_fdwrapper: getfd failed: %d\n", ret);
         goto put_wrapper_data;
