@@ -495,6 +495,7 @@ static const struct hashtab_key_params filenametr_key_params = {
 };
 #endif
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 static bool add_filename_trans(struct policydb *db, const char *s,
                    const char *t, const char *c, const char *d,
                    const char *o)
@@ -561,6 +562,16 @@ static bool add_filename_trans(struct policydb *db, const char *s,
     db->compat_filename_trans_count++;
     return ebitmap_set_bit(&trans->stypes, src->value - 1, 1) == 0;
 }
+#else
+// Older kernels do not expose filename transition helpers; skip gracefully.
+static bool add_filename_trans(struct policydb *db, const char *s,
+                   const char *t, const char *c, const char *d,
+                   const char *o)
+{
+    pr_warn("filename trans compat not supported on this kernel\n");
+    return false;
+}
+#endif
 
 static bool add_genfscon(struct policydb *db, const char *fs_name,
              const char *path, const char *context)
