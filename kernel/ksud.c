@@ -25,6 +25,7 @@
 #include "util.h"
 #include "selinux/selinux.h"
 #include "throne_tracker.h"
+#include "kernel_compat.h"
 
 bool ksu_module_mounted __read_mostly = false;
 bool ksu_boot_completed __read_mostly = false;

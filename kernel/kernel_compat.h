@@ -2,6 +2,7 @@
 #define __KSU_H_KERNEL_COMPAT
 
 #include <linux/fs.h>
+#include <linux/task_work.h>
 #include <linux/version.h>
 
 /*
@@ -20,5 +21,17 @@ static long ksu_copy_from_user_retry(void *to,
     // we faulted! fallback to slow path
     return copy_from_user(to, from, count);
 }
+
+#ifndef TWA_RESUME
+// Older kernels pass a boolean to task_work_add(), treat any notification
+// request as the resume path.
+#define TWA_RESUME true
+#endif
+#ifndef TWA_SIGNAL
+#define TWA_SIGNAL true
+#endif
+#ifndef TWA_NONE
+#define TWA_NONE false
+#endif
 
 #endif

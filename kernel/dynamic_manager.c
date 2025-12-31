@@ -22,6 +22,7 @@
 #include "klog.h" // IWYU pragma: keep
 #include "manager.h"
 #include "ksu.h"
+#include "kernel_compat.h"
 
 #define MAX_MANAGERS 2
 

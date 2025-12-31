@@ -19,6 +19,7 @@
 #include "sulog.h"
 #include "ksu.h"
 #include "feature.h"
+#include "kernel_compat.h"
 
 #if __SULOG_GATE
 

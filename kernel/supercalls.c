@@ -26,6 +26,7 @@
 #include "syscall_hook_manager.h"
 #include "throne_comm.h"
 #include "dynamic_manager.h"
+#include "kernel_compat.h"
 
 #include "sulog.h"
 #ifdef CONFIG_KSU_MANUAL_SU

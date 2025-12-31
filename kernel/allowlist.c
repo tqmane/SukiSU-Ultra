@@ -1,4 +1,5 @@
 #include <linux/mutex.h>
+#include <linux/sched.h>
 #include <linux/task_work.h>
 #include <linux/capability.h>
 #include <linux/compiler.h>
@@ -19,6 +20,7 @@
 #include "selinux/selinux.h"
 #include "allowlist.h"
 #include "manager.h"
+#include "kernel_compat.h"
 #include "syscall_hook_manager.h"
 
 #define FILE_MAGIC 0x7f4b5355 // ' KSU', u32

@@ -17,6 +17,7 @@
 #include "feature.h"
 #include "ksud.h"
 #include "ksu.h"
+#include "kernel_compat.h"
 
 #include "sulog.h"
 
