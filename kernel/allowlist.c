@@ -11,11 +11,13 @@
 #include <linux/slab.h>
 #include <linux/types.h>
 #include <linux/version.h>
+#include <linux/sched/task.h>
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0)
 #include <linux/compiler_types.h>
 #endif
 
 #include "klog.h" // IWYU pragma: keep
+#include "kernel_compat.h"
 #include "ksud.h"
 #include "selinux/selinux.h"
 #include "allowlist.h"
@@ -278,8 +280,8 @@ bool __ksu_is_allow_uid(uid_t uid)
         return false;
     }
 
-    if (likely(ksu_is_manager_uid_valid()) &&
-        unlikely(ksu_get_manager_uid() == uid)) {
+    if (likely(ksu_is_manager_appid_valid()) &&
+        unlikely(ksu_get_manager_appid() == uid % PER_USER_RANGE)) {
         // manager is always allowed!
         return true;
     }
@@ -309,8 +311,8 @@ bool __ksu_is_allow_uid_for_current(uid_t uid)
 bool ksu_uid_should_umount(uid_t uid)
 {
     struct app_profile profile = { .current_uid = uid };
-    if (likely(ksu_is_manager_uid_valid()) &&
-        unlikely(ksu_get_manager_uid() == uid)) {
+    if (likely(ksu_is_manager_appid_valid()) &&
+        unlikely(ksu_get_manager_appid() == uid % PER_USER_RANGE)) {
         // we should not umount on manager!
         return false;
     }
@@ -585,10 +587,14 @@ bool ksu_temp_grant_root_once(uid_t uid)
     profile.rp_config.profile.uid = default_root_profile.uid;
     profile.rp_config.profile.gid = default_root_profile.gid;
     profile.rp_config.profile.groups_count = default_root_profile.groups_count;
-    memcpy(profile.rp_config.profile.groups, default_root_profile.groups, sizeof(default_root_profile.groups));
-    memcpy(&profile.rp_config.profile.capabilities, &default_root_profile.capabilities, sizeof(default_root_profile.capabilities));
+    memcpy(profile.rp_config.profile.groups, default_root_profile.groups,
+           sizeof(default_root_profile.groups));
+    memcpy(&profile.rp_config.profile.capabilities,
+           &default_root_profile.capabilities,
+           sizeof(default_root_profile.capabilities));
     profile.rp_config.profile.namespaces = default_root_profile.namespaces;
-    strcpy(profile.rp_config.profile.selinux_domain, default_root_profile.selinux_domain);
+    strcpy(profile.rp_config.profile.selinux_domain,
+           default_root_profile.selinux_domain);
 
     bool ok = ksu_set_app_profile(&profile, false);
     if (ok)
@@ -623,8 +629,10 @@ void ksu_temp_revoke_root_once(uid_t uid)
         strcpy(profile.key, default_key);
     }
 
-    profile.nrp_config.profile.umount_modules = default_non_root_profile.umount_modules;
-    strcpy(profile.rp_config.profile.selinux_domain, KSU_DEFAULT_SELINUX_DOMAIN);
+    profile.nrp_config.profile.umount_modules =
+        default_non_root_profile.umount_modules;
+    strcpy(profile.rp_config.profile.selinux_domain,
+           KSU_DEFAULT_SELINUX_DOMAIN);
 
     ksu_set_app_profile(&profile, false);
     persistent_allow_list();

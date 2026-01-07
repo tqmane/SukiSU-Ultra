@@ -41,7 +41,7 @@ import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
 import com.ramcosta.composedestinations.generated.destinations.AppProfileTemplateScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.FlashScreenDestination
-import com.ramcosta.composedestinations.generated.destinations.LogViewerScreenDestination
+import com.ramcosta.composedestinations.generated.destinations.SulogScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.UmountManagerScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.MoreSettingsScreenDestination
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
@@ -76,7 +76,6 @@ fun SettingScreen(navigator: DestinationsNavigator) {
     val snackBarHost = LocalSnackbarHost.current
     val context = LocalContext.current
     val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
-    var isSuLogEnabled by remember { mutableStateOf(Natives.isSuLogEnabled()) }
     var selectedEngine by rememberSaveable {
         mutableStateOf(
             prefs.getString("webui_engine", "default") ?: "default"
@@ -138,65 +137,6 @@ fun SettingScreen(navigator: DestinationsNavigator) {
                             stringResource(id = R.string.settings_mode_default),
                             stringResource(id = R.string.settings_mode_temp_enable),
                             stringResource(id = R.string.settings_mode_always_enable),
-                        )
-                        var enhancedSecurityMode by rememberSaveable {
-                            mutableIntStateOf(
-                                run {
-                                    val currentEnabled = Natives.isEnhancedSecurityEnabled()
-                                    val savedPersist = prefs.getInt("enhanced_security_mode", 0)
-                                    if (savedPersist == 2) 2 else if (currentEnabled) 1 else 0
-                                }
-                            )
-                        }
-                        val enhancedStatus by produceState(initialValue = "") {
-                            value = getFeatureStatus("enhanced_security")
-                        }
-                        val enhancedSummary = when (enhancedStatus) {
-                            "unsupported" -> stringResource(id = R.string.feature_status_unsupported_summary)
-                            "managed" -> stringResource(id = R.string.feature_status_managed_summary)
-                            else -> stringResource(id = R.string.settings_enable_enhanced_security_summary)
-                        }
-                        SuperDropdown(
-                            icon = Icons.Rounded.EnhancedEncryption,
-                            title = stringResource(id = R.string.settings_enable_enhanced_security),
-                            summary = enhancedSummary,
-                            items = modeItems,
-                            leftAction = {
-                                Icon(
-                                    Icons.Rounded.EnhancedEncryption,
-                                    modifier = Modifier.padding(end = 16.dp),
-                                    contentDescription = stringResource(id = R.string.settings_enable_enhanced_security),
-                                    tint = MaterialTheme.colorScheme.onBackground
-                                )
-                            },
-                            enabled = enhancedStatus == "supported",
-                            selectedIndex = enhancedSecurityMode,
-                            onSelectedIndexChange = { index ->
-                                when (index) {
-                                    // Default: disable and save to persist
-                                    0 -> if (Natives.setEnhancedSecurityEnabled(false)) {
-                                        execKsud("feature save", true)
-                                        prefs.edit { putInt("enhanced_security_mode", 0) }
-                                        enhancedSecurityMode = 0
-                                    }
-
-                                    // Temporarily enable: save disabled state first, then enable
-                                    1 -> if (Natives.setEnhancedSecurityEnabled(false)) {
-                                        execKsud("feature save", true)
-                                        if (Natives.setEnhancedSecurityEnabled(true)) {
-                                            prefs.edit { putInt("enhanced_security_mode", 0) }
-                                            enhancedSecurityMode = 1
-                                        }
-                                    }
-
-                                    // Permanently enable: enable and save
-                                    2 -> if (Natives.setEnhancedSecurityEnabled(true)) {
-                                        execKsud("feature save", true)
-                                        prefs.edit { putInt("enhanced_security_mode", 2) }
-                                        enhancedSecurityMode = 2
-                                    }
-                                }
-                            }
                         )
 
                         var suCompatMode by rememberSaveable {
@@ -319,68 +259,6 @@ fun SettingScreen(navigator: DestinationsNavigator) {
                             }
                         )
 
-                        var suLogMode by rememberSaveable {
-                            mutableIntStateOf(
-                                run {
-                                    val currentEnabled = Natives.isSuLogEnabled()
-                                    val savedPersist = prefs.getInt("sulog_mode", 0)
-                                    if (savedPersist == 2) 2 else if (!currentEnabled) 1 else 0
-                                }
-                            )
-                        }
-                        val suLogStatus by produceState(initialValue = "") {
-                            value = getFeatureStatus("sulog")
-                        }
-                        val suLogSummary = when (suLogStatus) {
-                            "unsupported" -> stringResource(id = R.string.feature_status_unsupported_summary)
-                            "managed" -> stringResource(id = R.string.feature_status_managed_summary)
-                            else -> stringResource(id = R.string.settings_disable_sulog_summary)
-                        }
-                        SuperDropdown(
-                            title = stringResource(id = R.string.settings_disable_sulog),
-                            summary = suLogSummary,
-                            items = modeItems,
-                            leftAction = {
-                                Icon(
-                                    Icons.Rounded.RemoveCircle,
-                                    modifier = Modifier.padding(end = 16.dp),
-                                    contentDescription = stringResource(id = R.string.settings_disable_sulog),
-                                    tint = MaterialTheme.colorScheme.onBackground
-                                )
-                            },
-                            enabled = suLogStatus == "supported",
-                            selectedIndex = suLogMode,
-                            onSelectedIndexChange = { index ->
-                                when (index) {
-                                    // Default: enable and save to persist
-                                    0 -> if (Natives.setSuLogEnabled(true)) {
-                                        execKsud("feature save", true)
-                                        prefs.edit { putInt("sulog_mode", 0) }
-                                        suLogMode = 0
-                                        isSuLogEnabled = true
-                                    }
-
-                                    // Temporarily disable: save enabled state first, then disable
-                                    1 -> if (Natives.setSuLogEnabled(true)) {
-                                        execKsud("feature save", true)
-                                        if (Natives.setSuLogEnabled(false)) {
-                                            prefs.edit { putInt("sulog_mode", 0) }
-                                            suLogMode = 1
-                                            isSuLogEnabled = false
-                                        }
-                                    }
-
-                                    // Permanently disable: disable and save
-                                    2 -> if (Natives.setSuLogEnabled(false)) {
-                                        execKsud("feature save", true)
-                                        prefs.edit { putInt("sulog_mode", 2) }
-                                        suLogMode = 2
-                                        isSuLogEnabled = false
-                                    }
-                                }
-                            }
-                        )
-
                         // 卸载模块开关
                         var umountChecked by rememberSaveable { mutableStateOf(Natives.isDefaultUmountModules()) }
                         SwitchItem(
@@ -494,16 +372,14 @@ fun SettingScreen(navigator: DestinationsNavigator) {
 
                     // 查看使用日志
                     KsuIsValid {
-                        if (isSuLogEnabled) {
-                            SettingItem(
-                                icon = Icons.Filled.Visibility,
-                                title = stringResource(R.string.log_viewer_view_logs),
-                                summary = stringResource(R.string.log_viewer_view_logs_summary),
-                                onClick = {
-                                    navigator.navigate(LogViewerScreenDestination)
-                                }
-                            )
-                        }
+                        SettingItem(
+                            icon = Icons.Filled.Visibility,
+                            title = stringResource(R.string.settings_view_sulog),
+                            summary = stringResource(R.string.settings_view_sulog_summary),
+                            onClick = {
+                                navigator.navigate(SulogScreenDestination)
+                            }
+                        )
                     }
                     KsuIsValid {
                         SettingItem(

@@ -311,22 +311,6 @@ NativeBridge(setKernelUmountEnabled, jboolean, jboolean enabled) {
     return set_kernel_umount_enabled(enabled);
 }
 
-NativeBridgeNP(isEnhancedSecurityEnabled, jboolean) {
-    return is_enhanced_security_enabled();
-}
-
-NativeBridge(setEnhancedSecurityEnabled, jboolean, jboolean enabled) {
-    return set_enhanced_security_enabled(enabled);
-}
-
-NativeBridgeNP(isSuLogEnabled, jboolean) {
-    return is_sulog_enabled();
-}
-
-NativeBridge(setSuLogEnabled, jboolean, jboolean enabled) {
-    return set_sulog_enabled(enabled);
-}
-
 NativeBridge(getUserName, jstring, jint uid) {
     struct passwd *pw = getpwuid((uid_t) uid);
     if (pw && pw->pw_name && pw->pw_name[0] != '\0') {
@@ -347,79 +331,6 @@ NativeBridgeNP(getHookType, jstring) {
 	return GetEnvironment()->NewStringUTF(env, hook_type);
 }
 
-// dynamic manager
-NativeBridge(setDynamicManager, jboolean, jint size, jstring hash) {
-	if (!hash) {
-		LogDebug("setDynamicManager: hash is null");
-		return false;
-	}
-
-	const char* chash = GetEnvironment()->GetStringUTFChars(env, hash, nullptr);
-	bool result = set_dynamic_manager((unsigned int)size, chash);
-	GetEnvironment()->ReleaseStringUTFChars(env, hash, chash);
-
-	LogDebug("setDynamicManager: size=0x%x, result=%d", size, result);
-	return result;
-}
-
-NativeBridgeNP(getDynamicManager, jobject) {
-	struct dynamic_manager_user_config config;
-	bool result = get_dynamic_manager(&config);
-
-	if (!result) {
-		LogDebug("getDynamicManager: failed to get dynamic manager config");
-		return NULL;
-	}
-
-	jobject obj = CREATE_JAVA_OBJECT("com/sukisu/ultra/Natives$DynamicManagerConfig");
-	jclass cls = GetEnvironment()->FindClass(env, "com/sukisu/ultra/Natives$DynamicManagerConfig");
-
-	SET_INT_FIELD(obj, cls, size, (jint)config.size);
-	SET_STRING_FIELD(obj, cls, hash, config.hash);
-
-	LogDebug("getDynamicManager: size=0x%x, hash=%.16s...", config.size, config.hash);
-	return obj;
-}
-
-NativeBridgeNP(clearDynamicManager, jboolean) {
-	bool result = clear_dynamic_manager();
-	LogDebug("clearDynamicManager: result=%d", result);
-	return result;
-}
-
-// Get a list of active managers
-NativeBridgeNP(getManagersList, jobject) {
-	struct manager_list_info managerListInfo;
-	bool result = get_managers_list(&managerListInfo);
-
-	if (!result) {
-		LogDebug("getManagersList: failed to get active managers list");
-		return NULL;
-	}
-
-	jobject obj = CREATE_JAVA_OBJECT("com/sukisu/ultra/Natives$ManagersList");
-	jclass managerListCls = GetEnvironment()->FindClass(env, "com/sukisu/ultra/Natives$ManagersList");
-
-	SET_INT_FIELD(obj, managerListCls, count, (jint)managerListInfo.count);
-
-	jobject managersList = CREATE_ARRAYLIST();
-
-	for (int i = 0; i < managerListInfo.count; i++) {
-		jobject managerInfo = CREATE_JAVA_OBJECT_WITH_PARAMS(
-				"com/sukisu/ultra/Natives$ManagerInfo",
-				"(II)V",
-				(jint)managerListInfo.managers[i].uid,
-				(jint)managerListInfo.managers[i].signature_index
-		);
-		ADD_TO_LIST(managersList, managerInfo);
-	}
-
-	SET_OBJECT_FIELD(obj, managerListCls, managers, managersList);
-
-	LogDebug("getManagersList: count=%d", managerListInfo.count);
-	return obj;
-}
-
 NativeBridge(verifyModuleSignature, jboolean, jstring modulePath) {
 #if defined(__aarch64__) || defined(_M_ARM64) || defined(__arm__) || defined(_M_ARM)
 	if (!modulePath) {
@@ -437,16 +348,4 @@ NativeBridge(verifyModuleSignature, jboolean, jstring modulePath) {
 	LogDebug("verifyModuleSignature: not supported on non-ARM architecture");
 	return false;
 #endif
-}
-
-NativeBridgeNP(isUidScannerEnabled, jboolean) {
-	return is_uid_scanner_enabled();
-}
-
-NativeBridge(setUidScannerEnabled, jboolean, jboolean enabled) {
-	return set_uid_scanner_enabled(enabled);
-}
-
-NativeBridgeNP(clearUidScannerEnvironment, jboolean) {
-	return clear_uid_scanner_environment();
 }

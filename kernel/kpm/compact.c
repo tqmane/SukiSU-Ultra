@@ -51,13 +51,13 @@ static int sukisu_is_current_uid_manager(void)
 
 static uid_t sukisu_get_manager_uid(void)
 {
-    return ksu_manager_uid;
+    return ksu_manager_appid;
 }
 
 static void sukisu_set_manager_uid(uid_t uid, int force)
 {
-    if (force || ksu_manager_uid == -1)
-        ksu_manager_uid = uid;
+    if (force || ksu_manager_appid == -1)
+        ksu_manager_appid = uid;
 }
 
 struct CompactAddressSymbol {
@@ -79,14 +79,16 @@ static struct CompactAddressSymbol address_symbol[] = {
     { "sukisu_set_manager_uid", &sukisu_set_manager_uid }
 };
 
-unsigned long sukisu_compact_find_symbol(const char* name)
+unsigned long sukisu_compact_find_symbol(const char *name)
 {
     int i;
     unsigned long addr;
 
-    for (i = 0; i < (sizeof(address_symbol) / sizeof(struct CompactAddressSymbol)); i++) {
+    for (i = 0;
+         i < (sizeof(address_symbol) / sizeof(struct CompactAddressSymbol));
+         i++) {
         struct CompactAddressSymbol *symbol = &address_symbol[i];
-        
+
         if (strcmp(name, symbol->symbol_name) == 0)
             return (unsigned long)symbol->addr;
     }

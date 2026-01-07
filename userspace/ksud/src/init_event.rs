@@ -47,9 +47,6 @@ pub fn on_post_data_fs() -> Result<()> {
 
     assets::ensure_binaries(true).with_context(|| "Failed to extract bin assets")?;
 
-    // Start UID scanner daemon with highest priority
-    crate::uid_scanner::start_uid_scanner_daemon()?;
-
     // if we are in safe mode, we should disable all modules
     if safe_mode {
         warn!("safe mode, skip post-fs-data scripts and disable all modules!");
@@ -88,13 +85,8 @@ pub fn on_post_data_fs() -> Result<()> {
     }
 
     #[cfg(target_arch = "aarch64")]
-    if let Err(e) = kpm::start_kpm_watcher() {
+    if let Err(e) = kpm::booted_load() {
         warn!("KPM: Failed to start KPM watcher: {e}");
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    if let Err(e) = kpm::load_kpm_modules() {
-        warn!("KPM: Failed to load KPM modules: {e}");
     }
 
     // execute metamodule post-fs-data script first (priority)
