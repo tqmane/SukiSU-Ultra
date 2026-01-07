@@ -7,24 +7,8 @@
 #include <linux/task_work.h>
 #include <linux/errno.h>
 
-/*
- * ksu_copy_from_user_retry
- * try nofault copy first, if it fails, try with plain
- * paramters are the same as copy_from_user
- * 0 = success
- */
-static long ksu_copy_from_user_retry(void *to, const void __user *from,
-                                     unsigned long count)
-{
-    long ret = copy_from_user_nofault(to, from, count);
-    if (likely(!ret))
-        return ret;
-
-    // we faulted! fallback to slow path
-    return copy_from_user(to, from, count);
-}
-
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0)
+/* Older kernels don't provide copy_from_user_nofault helper. */
 static inline long copy_from_user_nofault(void *to, const void __user *from,
 					  unsigned long n)
 {
@@ -42,6 +26,23 @@ static inline long strncpy_from_user_nofault(char *dst,
 	return strncpy_from_user(dst, src, count);
 }
 #endif
+
+/*
+ * ksu_copy_from_user_retry
+ * try nofault copy first, if it fails, try with plain
+ * paramters are the same as copy_from_user
+ * 0 = success
+ */
+static long ksu_copy_from_user_retry(void *to, const void __user *from,
+                                     unsigned long count)
+{
+    long ret = copy_from_user_nofault(to, from, count);
+    if (likely(!ret))
+        return ret;
+
+    // we faulted! fallback to slow path
+    return copy_from_user(to, from, count);
+}
 
 #ifndef TWA_RESUME
 /* task_work_add on older kernels takes a bool notify flag. */
