@@ -18,6 +18,7 @@
 #include "sucompat.h"
 #include "setuid_hook.h"
 #include "selinux/selinux.h"
+#include "kernel_compat.h"
 #include "util.h"
 #include "ksud.h"
 
