@@ -23,6 +23,7 @@
 #include "selinux/selinux.h"
 #include "file_wrapper.h"
 #include "syscall_hook_manager.h"
+#include "kernel_compat.h"
 
 #ifdef CONFIG_KSU_MANUAL_SU
 #include "manual_su.h"
