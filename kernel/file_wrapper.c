@@ -13,6 +13,7 @@
 #include <linux/version.h>
 #include <linux/mount.h>
 
+#include "kernel_compat.h"
 #include "objsec.h"
 
 #include "klog.h" // IWYU pragma: keep
@@ -20,6 +21,17 @@
 #include "ksud.h"
 
 #include "file_wrapper.h"
+
+/* Older kernels lack security_inode_init_security_anon helper. */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 2)
+static inline int
+security_inode_init_security_anon(struct inode *inode,
+				  const struct qstr *name,
+				  const struct inode *context_inode)
+{
+	return 0;
+}
+#endif
 
 struct ksu_file_wrapper {
     struct file *orig;
