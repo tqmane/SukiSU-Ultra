@@ -15,6 +15,7 @@
 #include "allowlist.h"
 #include "feature.h"
 #include "klog.h" // IWYU pragma: keep
+#include "kernel_compat.h"
 #include "ksud.h"
 #include "sucompat.h"
 #include "app_profile.h"

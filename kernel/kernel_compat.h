@@ -4,6 +4,8 @@
 #include <linux/fs.h>
 #include <linux/uaccess.h>
 #include <linux/version.h>
+#include <linux/task_work.h>
+#include <linux/errno.h>
 
 /*
  * ksu_copy_from_user_retry
@@ -39,6 +41,15 @@ static inline long strncpy_from_user_nofault(char *dst,
 {
 	return strncpy_from_user(dst, src, count);
 }
+#endif
+
+#ifndef TWA_RESUME
+/* task_work_add on older kernels takes a bool notify flag. */
+#define TWA_RESUME true
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
+#define KSU_NO_SECCOMP_FILTER_COUNT
 #endif
 
 #endif
