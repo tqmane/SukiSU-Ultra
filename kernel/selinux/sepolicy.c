@@ -507,6 +507,76 @@ static bool add_filename_trans(struct policydb *db, const char *s,
         return false;
     }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
+    struct filename_trans ft;
+    struct filename_trans *new_ft = NULL;
+    struct filename_trans_datum *trans = NULL;
+    struct filename_trans_datum *new_trans = NULL;
+    int rc;
+
+    if (!db->filename_trans) {
+        pr_warn("filename_trans table is not initialized\n");
+        return false;
+    }
+
+    ft.stype = src->value;
+    ft.ttype = tgt->value;
+    ft.tclass = cls->value;
+    ft.name = o;
+
+    trans = hashtab_search(db->filename_trans, &ft);
+    if (trans) {
+        trans->otype = def->value;
+        return true;
+    }
+
+    new_trans =
+        (struct filename_trans_datum *)kzalloc(sizeof(*new_trans), GFP_ATOMIC);
+    new_ft = (struct filename_trans *)kzalloc(sizeof(*new_ft), GFP_ATOMIC);
+    if (!new_trans || !new_ft) {
+        kfree(new_trans);
+        kfree(new_ft);
+        return false;
+    }
+
+    *new_ft = ft;
+    new_ft->name = kstrdup(o, GFP_ATOMIC);
+    if (!new_ft->name) {
+        kfree(new_trans);
+        kfree(new_ft);
+        return false;
+    }
+
+    new_trans->otype = def->value;
+
+    rc = ebitmap_set_bit(&db->filename_trans_ttypes, new_ft->ttype, 1);
+    if (rc) {
+        kfree((void *)new_ft->name);
+        kfree(new_ft);
+        kfree(new_trans);
+        return false;
+    }
+
+    rc = hashtab_insert(db->filename_trans, new_ft, new_trans);
+    if (rc) {
+        if (rc == -EEXIST) {
+            trans = hashtab_search(db->filename_trans, &ft);
+            if (trans) {
+                trans->otype = def->value;
+            }
+            kfree((void *)new_ft->name);
+            kfree(new_ft);
+            kfree(new_trans);
+            return true;
+        }
+        kfree((void *)new_ft->name);
+        kfree(new_ft);
+        kfree(new_trans);
+        return false;
+    }
+
+    return true;
+#else
     struct filename_trans_key key;
     key.ttype = tgt->value;
     key.tclass = cls->value;
@@ -542,6 +612,7 @@ static bool add_filename_trans(struct policydb *db, const char *s,
 
     db->compat_filename_trans_count++;
     return ebitmap_set_bit(&trans->stypes, src->value - 1, 1) == 0;
+#endif
 }
 
 static bool add_genfscon(struct policydb *db, const char *fs_name,

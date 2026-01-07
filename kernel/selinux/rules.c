@@ -15,10 +15,14 @@
 
 static struct policydb *get_policydb(void)
 {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
     struct policydb *db;
     struct selinux_policy *policy = selinux_state.policy;
     db = &policy->policydb;
     return db;
+#else
+    return &selinux_state.ss->policydb;
+#endif
 }
 
 static DEFINE_MUTEX(ksu_rules);
