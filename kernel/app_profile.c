@@ -62,7 +62,16 @@ static void setup_groups(struct root_profile *profile, struct cred *cred)
     put_group_info(group_info);
 }
 
+// seccomp_filter_release() is introduced in upstream Linux v5.9.
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
 void seccomp_filter_release(struct task_struct *tsk);
+#define ksu_seccomp_filter_release seccomp_filter_release
+#else
+static inline void ksu_seccomp_filter_release(struct task_struct *tsk)
+{
+    put_seccomp_filter(tsk);
+}
+#endif
 
 static void disable_seccomp(void)
 {
@@ -102,7 +111,7 @@ static void disable_seccomp(void)
     fake->sighand = NULL;
 #endif
 
-    seccomp_filter_release(fake);
+    ksu_seccomp_filter_release(fake);
     kfree(fake);
 }
 
@@ -242,7 +251,7 @@ static void disable_seccomp_for_task(struct task_struct *tsk)
     fake->sighand = NULL;
 #endif
 
-    seccomp_filter_release(fake);
+    ksu_seccomp_filter_release(fake);
     kfree(fake);
 }
 
