@@ -14,7 +14,7 @@
 
 // SukiSU Ultra kernel su version full strings
 #ifndef KSU_VERSION_FULL
-#define KSU_VERSION_FULL "v3.x-00000000@unknown"
+#define KSU_VERSION_FULL "v1.0-tqmane"
 #endif
 #define KSU_FULL_VERSION_STRING 255
 
