@@ -35,6 +35,7 @@
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0) && defined(CONFIG_MODULES)
 #include <linux/moduleloader.h>
 #endif
+#include "../ksu.h"
 #include "kpm.h"
 #include "compact.h"
 
@@ -59,6 +60,9 @@ noinline NO_OPTIMIZE void sukisu_kpm_load_module_path(const char *path,
             "path=%s args=%s ptr=%p\n",
             path, args, ptr);
 
+    if (result)
+        *result = -ENOSYS;
+
     __asm__ volatile("nop");
 }
 EXPORT_SYMBOL(sukisu_kpm_load_module_path);
@@ -70,6 +74,9 @@ noinline NO_OPTIMIZE void sukisu_kpm_unload_module(const char *name, void *ptr,
             "name=%s ptr=%p\n",
             name, ptr);
 
+    if (result)
+        *result = -ENOSYS;
+
     __asm__ volatile("nop");
 }
 EXPORT_SYMBOL(sukisu_kpm_unload_module);
@@ -77,6 +84,9 @@ EXPORT_SYMBOL(sukisu_kpm_unload_module);
 noinline NO_OPTIMIZE void sukisu_kpm_num(int *result)
 {
     pr_info("kpm: Stub function called (sukisu_kpm_num).\n");
+
+    if (result)
+        *result = 0;
 
     __asm__ volatile("nop");
 }
@@ -89,6 +99,11 @@ noinline NO_OPTIMIZE void sukisu_kpm_info(const char *name, char *buf,
             "name=%s buffer=%p\n",
             name, buf);
 
+    if (buf && bufferSize > 0)
+        buf[0] = '\0';
+    if (size)
+        *size = 0;
+
     __asm__ volatile("nop");
 }
 EXPORT_SYMBOL(sukisu_kpm_info);
@@ -99,6 +114,11 @@ noinline NO_OPTIMIZE void sukisu_kpm_list(void *out, int bufferSize,
     pr_info("kpm: Stub function called (sukisu_kpm_list). "
             "buffer=%p size=%d\n",
             out, bufferSize);
+
+    if (out && bufferSize > 0)
+        ((char *)out)[0] = '\0';
+    if (result)
+        *result = 0;
 }
 EXPORT_SYMBOL(sukisu_kpm_list);
 
@@ -109,15 +129,21 @@ noinline NO_OPTIMIZE void sukisu_kpm_control(const char *name, const char *args,
             "name=%p args=%p arg_len=%ld\n",
             name, args, arg_len);
 
+    if (result)
+        *result = -ENOSYS;
+
     __asm__ volatile("nop");
 }
 EXPORT_SYMBOL(sukisu_kpm_control);
 
 noinline NO_OPTIMIZE void sukisu_kpm_version(char *buf, int bufferSize)
 {
-    pr_info("kpm: Stub function called (sukisu_kpm_version). "
-            "buffer=%p\n",
-            buf);
+    pr_info("kpm: Stub function called (sukisu_kpm_version). buffer=%p\n", buf);
+
+    if (!buf || bufferSize <= 0)
+        return;
+
+    scnprintf(buf, bufferSize, "kpm-%s", KSU_VERSION_FULL);
 }
 EXPORT_SYMBOL(sukisu_kpm_version);
 
@@ -172,8 +198,8 @@ noinline int sukisu_handle_kpm(unsigned long control_code, unsigned long arg1,
         sukisu_kpm_num(&res);
     } else if (control_code == SUKISU_KPM_INFO) {
         char kernel_name_buffer[256];
-        char buf[256];
-        int size;
+        char buf[256] = { 0 };
+        int size = 0;
 
         if (arg1 == 0 || arg2 == 0) {
             res = -EINVAL;
@@ -191,34 +217,50 @@ noinline int sukisu_handle_kpm(unsigned long control_code, unsigned long arg1,
         sukisu_kpm_info((const char *)&kernel_name_buffer, (char *)&buf,
                         sizeof(buf), &size);
 
-        if (!access_ok(arg2, size)) {
-            goto invalid_arg;
+        {
+            int out_len = size;
+            if (out_len <= 0 || out_len > sizeof(buf))
+                out_len = strnlen(buf, sizeof(buf) - 1) + 1;
+
+            if (!access_ok((void __user *)arg2, out_len))
+                goto invalid_arg;
+
+            if (copy_to_user((void __user *)arg2, buf, out_len) != 0) {
+                res = -EFAULT;
+                goto exit;
+            }
         }
 
-        res = copy_to_user(arg2, &buf, size);
+        res = 0;
 
     } else if (control_code == SUKISU_KPM_LIST) {
-        char buf[1024];
+        char buf[1024] = { 0 };
         int len = (int)arg2;
 
-        if (len <= 0) {
+        if (arg1 == 0 || len <= 0) {
             res = -EINVAL;
             goto exit;
         }
 
-        if (!access_ok(arg2, len)) {
-            goto invalid_arg;
-        }
-
         sukisu_kpm_list((char *)&buf, sizeof(buf), &res);
 
-        if (res > len) {
-            res = -ENOBUFS;
-            goto exit;
+        {
+            int out_len = strnlen(buf, sizeof(buf) - 1) + 1;
+            if (out_len > len) {
+                res = -ENOBUFS;
+                goto exit;
+            }
+
+            if (!access_ok((void __user *)arg1, out_len))
+                goto invalid_arg;
+
+            if (copy_to_user((void __user *)arg1, buf, out_len) != 0) {
+                res = -EFAULT;
+                goto exit;
+            }
         }
 
-        if (copy_to_user(arg1, &buf, len) != 0)
-            pr_info("kpm: Copy to user failed.");
+        res = 0;
 
     } else if (control_code == SUKISU_KPM_CONTROL) {
         char kpm_name[KPM_NAME_LEN] = { 0 };
@@ -248,18 +290,31 @@ noinline int sukisu_handle_kpm(unsigned long control_code, unsigned long arg1,
     } else if (control_code == SUKISU_KPM_VERSION) {
         char buffer[256] = { 0 };
 
+        unsigned int outlen = (unsigned int)arg2;
+        if (arg1 == 0 || outlen == 0) {
+            res = -EINVAL;
+            goto exit;
+        }
+
         sukisu_kpm_version((char *)&buffer, sizeof(buffer));
 
-        unsigned int outlen = (unsigned int)arg2;
-        int len = strlen(buffer);
+        int len = strnlen(buffer, sizeof(buffer) - 1);
         if (len >= outlen)
             len = outlen - 1;
 
-        res = copy_to_user(arg1, &buffer, len + 1);
+        if (!access_ok((void __user *)arg1, len + 1))
+            goto invalid_arg;
+
+        if (copy_to_user((void __user *)arg1, buffer, len + 1) != 0) {
+            res = -EFAULT;
+            goto exit;
+        }
+
+        res = 0;
     }
 
 exit:
-    if (copy_to_user(result_code, &res, sizeof(res)) != 0)
+    if (copy_to_user((void __user *)result_code, &res, sizeof(res)) != 0)
         pr_info("kpm: Copy to user failed.");
 
     return 0;
@@ -288,13 +343,7 @@ int do_kpm(void __user *arg)
         return -EFAULT;
     }
 
-    if (!access_ok(cmd.control_code, sizeof(int))) {
-        pr_err("kpm: invalid control_code pointer %px\n",
-               (void *)cmd.control_code);
-        return -EFAULT;
-    }
-
-    if (!access_ok(cmd.result_code, sizeof(int))) {
+    if (!access_ok((void __user *)cmd.result_code, sizeof(int))) {
         pr_err("kpm: invalid result_code pointer %px\n",
                (void *)cmd.result_code);
         return -EFAULT;
