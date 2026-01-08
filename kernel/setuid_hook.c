@@ -10,7 +10,12 @@
 #include <linux/string.h>
 #include <linux/types.h>
 #include <linux/uaccess.h>
+#include <linux/sched/user.h>
 #include <linux/uidgid.h>
+
+#ifdef CONFIG_KSU_SUSFS
+#include <linux/susfs.h>
+#endif
 
 #include "allowlist.h"
 #include "setuid_hook.h"
@@ -35,6 +40,37 @@ int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)
     uid_t old_uid = current_uid().val;
 
     pr_info("handle_setresuid from %d to %d\n", old_uid, new_uid);
+
+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+    /*
+     * Zygote (and freshly forked children before selinux context switch) will
+     * still match is_zygote() here. Mark it so SUS_MOUNT mount-id reordering
+     * stays effective after the context changes.
+     */
+    if (is_zygote(current_cred()) &&
+        !(current->android_kabi_reserved1 & TASK_STRUCT_KABI1_IS_ZYGOTE)) {
+        current->android_kabi_reserved1 |= TASK_STRUCT_KABI1_IS_ZYGOTE;
+    }
+#endif
+
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+    /*
+     * SUS_PATH hiding is keyed off current_cred()->user->android_kabi_reserved1.
+     * This hook runs at syscall-enter, so current_cred()->user is still the old
+     * uid. Use find_user(new_uid) to tag the target uid's user_struct.
+     */
+    if (is_appuid(new_uid) && new_uid > 2000 && !ksu_is_allow_uid(new_uid)) {
+        kuid_t kuid = make_kuid(current_user_ns(), new_uid);
+        if (uid_valid(kuid)) {
+            struct user_struct *user = find_user(kuid);
+            if (user) {
+                user->android_kabi_reserved1 |=
+                    USER_STRUCT_KABI1_NON_ROOT_USER_APP_PROFILE;
+                free_uid(user);
+            }
+        }
+    }
+#endif
 
     if (likely(ksu_is_manager_appid_valid()) &&
         unlikely(ksu_get_manager_appid() == new_uid % PER_USER_RANGE)) {
@@ -66,6 +102,13 @@ int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)
     } else {
         ksu_clear_task_tracepoint_flag_if_needed(current);
     }
+
+#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
+    if ((is_appuid(new_uid) || is_isolated_process(new_uid)) &&
+        ksu_uid_should_umount(new_uid)) {
+        susfs_try_umount(new_uid);
+    }
+#endif
 
     // Handle kernel umount
     ksu_handle_umount(old_uid, new_uid);

@@ -33,4 +33,74 @@ config KPM
     select KALLSYMS
     select KALLSYMS_ALL
 
+menu "KernelSU - SUSFS"
+
+config KSU_SUSFS
+    bool "KernelSU addon - SUSFS"
+    depends on KSU
+    default y
+    help
+      Integrate SUSFS into the kernel and expose its control interface via prctl.
+
+config KSU_SUSFS_SUS_PATH
+    bool "Enable to hide suspicious path"
+    depends on KSU_SUSFS
+    default y
+    help
+      Hide user-defined paths (and sub-paths) from various VFS lookups.
+
+config KSU_SUSFS_SUS_MOUNT
+    bool "Enable to hide suspicious mounts"
+    depends on KSU_SUSFS
+    default y
+    help
+      Hide user-defined mount paths from /proc/*/mounts and reorder mount IDs for
+      processes spawned from zygote.
+
+config KSU_SUSFS_SUS_KSTAT
+    bool "Enable to spoof suspicious kstat"
+    depends on KSU_SUSFS
+    default y
+    help
+      Spoof stat() information (ino/dev/nlink/size/blocks/time) for user-defined
+      file/directory paths.
+
+config KSU_SUSFS_SUS_OVERLAYFS
+    bool "Enable SUSFS overlayfs helpers"
+    depends on KSU_SUSFS
+    default y
+    help
+      Automatically spoof kstat/kstatfs for overlayfs entries.
+
+config KSU_SUSFS_TRY_UMOUNT
+    bool "Enable SUSFS try_umount"
+    depends on KSU_SUSFS
+    default y
+    help
+      Allow userspace to register mount paths to be unmounted for NO-root apps.
+
+config KSU_SUSFS_SPOOF_UNAME
+    bool "Enable to spoof uname"
+    depends on KSU_SUSFS
+    default y
+    help
+      Spoof uname(2) release/version strings for all processes.
+
+config KSU_SUSFS_ENABLE_LOG
+    bool "Enable SUSFS kernel logging"
+    depends on KSU_SUSFS
+    default y
+    help
+      Enable SUSFS logging. Disable to completely silence SUSFS logs.
+
+config KSU_SUSFS_SUS_SU
+    bool "Enable SUS-SU in runtime temporarily (experimental)"
+    depends on KSU_SUSFS && OVERLAY_FS
+    default n
+    help
+      Experimental: enable/disable SUS-SU support. Not required for SUSFS core
+      hiding/spoofing features.
+
+endmenu
+
 endmenu
