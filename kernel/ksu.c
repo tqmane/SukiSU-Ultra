@@ -3,6 +3,7 @@
 #include <linux/kobject.h>
 #include <linux/module.h>
 #include <linux/workqueue.h>
+#include <linux/version.h>
 
 #include "allowlist.h"
 #include "feature.h"
@@ -13,6 +14,9 @@
 #include "supercalls.h"
 #include "ksu.h"
 #include "file_wrapper.h"
+#include "app_profile.h"
+#include "objsec.h"
+#include "selinux/selinux.h"
 
 struct cred *ksu_cred;
 
@@ -95,8 +99,53 @@ module_exit(kernelsu_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("weishu");
 MODULE_DESCRIPTION("Android KernelSU");
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
-MODULE_IMPORT_NS("VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver");
-#else
 MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
+
+
+// Susfs Sus SU support
+static bool susfs_sus_su_enabled = false;
+
+void ksu_susfs_enable_sus_su(void)
+{
+    susfs_sus_su_enabled = true;
+}
+
+void ksu_susfs_disable_sus_su(void)
+{
+    susfs_sus_su_enabled = false;
+}
+
+bool susfs_is_allow_su(void)
+{
+    return susfs_sus_su_enabled;
+}
+
+// Wrapper for susfs to check if current process is in KSU domain
+bool susfs_is_current_ksu_domain(void)
+{
+    return is_ksu_domain();
+}
+
+void escape_to_root(void)
+{
+    escape_with_root_profile();
+}
+
+bool ksu_devpts_hook = true;
+int ksu_handle_devpts(struct inode *inode)
+{
+    if (!susfs_is_allow_su()) {
+        return 0;
+    }
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0) || defined(KSU_OPTIONAL_SELINUX_INODE)
+    struct inode_security_struct *sec = selinux_inode(inode);
+#else
+    struct inode_security_struct *sec = (struct inode_security_struct *)inode->i_security;
 #endif
+
+    if (ksu_file_sid && sec) {
+        sec->sid = ksu_file_sid;
+    }
+    return 0;
+}

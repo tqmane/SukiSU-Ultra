@@ -48,9 +48,15 @@ int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)
      * stays effective after the context changes.
      */
     if (is_zygote(current_cred()) &&
+        !(current->susfs_task_state & TASK_STRUCT_IS_ZYGOTE)) {
+        current->susfs_task_state |= TASK_STRUCT_IS_ZYGOTE;
+    }
+/*
+    if (is_zygote(current_cred()) &&
         !(current->android_kabi_reserved1 & TASK_STRUCT_KABI1_IS_ZYGOTE)) {
         current->android_kabi_reserved1 |= TASK_STRUCT_KABI1_IS_ZYGOTE;
     }
+*/
 #endif
 
 #ifdef CONFIG_KSU_SUSFS_SUS_PATH
@@ -68,6 +74,7 @@ int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)
                     USER_STRUCT_KABI1_NON_ROOT_USER_APP_PROFILE;
                 free_uid(user);
             }
+			current->susfs_task_state |= TASK_STRUCT_NON_ROOT_USER_APP_PROC;
         }
     }
 #endif
