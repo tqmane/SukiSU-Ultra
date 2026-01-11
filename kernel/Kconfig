@@ -65,13 +65,6 @@ config KSU_SUSFS_SUS_KSTAT
       Spoof stat() information (ino/dev/nlink/size/blocks/time) for user-defined
       file/directory paths.
 
-config KSU_SUSFS_SUS_OVERLAYFS
-    bool "Enable SUSFS overlayfs helpers"
-    depends on KSU_SUSFS
-    default y
-    help
-      Automatically spoof kstat/kstatfs for overlayfs entries.
-
 config KSU_SUSFS_TRY_UMOUNT
     bool "Enable SUSFS try_umount"
     depends on KSU_SUSFS

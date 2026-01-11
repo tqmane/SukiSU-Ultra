@@ -101,9 +101,6 @@ static void ksu_susfs_build_features(char *buf, size_t buf_size)
 #ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
     pos = ksu_susfs_append_feature(buf, buf_size, pos, "SUS_KSTAT");
 #endif
-#ifdef CONFIG_KSU_SUSFS_SUS_OVERLAYFS
-    pos = ksu_susfs_append_feature(buf, buf_size, pos, "SUS_OVERLAYFS");
-#endif
 #ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
     pos = ksu_susfs_append_feature(buf, buf_size, pos, "TRY_UMOUNT");
 #endif
@@ -752,51 +749,7 @@ static int do_enable_kpm(void __user *arg)
 
 // Susfs handlers
 #ifdef CONFIG_KSU_SUSFS
-static int do_susfs_add_sus_path(void __user *arg)
-{
-    return susfs_add_sus_path((struct st_susfs_sus_path __user *)arg);
-}
-
-static int do_susfs_add_sus_mount(void __user *arg)
-{
-    return susfs_add_sus_mount((struct st_susfs_sus_mount __user *)arg);
-}
-
-static int do_susfs_add_sus_kstat(void __user *arg)
-{
-    return susfs_add_sus_kstat((struct st_susfs_sus_kstat __user *)arg);
-}
-
-static int do_susfs_update_sus_kstat(void __user *arg)
-{
-    return susfs_update_sus_kstat((struct st_susfs_sus_kstat __user *)arg);
-}
-
-static int do_susfs_add_try_umount(void __user *arg)
-{
-    return susfs_add_try_umount((struct st_susfs_try_umount __user *)arg);
-}
-
-static int do_susfs_set_uname(void __user *arg)
-{
-    return susfs_set_uname((struct st_susfs_uname __user *)arg);
-}
-
-static int do_susfs_set_log(void __user *arg)
-{
-    struct ksu_set_feature_cmd cmd;
-    if (copy_from_user(&cmd, arg, sizeof(cmd)))
-        return -EFAULT;
-    susfs_set_log(cmd.value);
-    return 0;
-}
-
-#ifdef CONFIG_KSU_SUSFS_SUS_SU
-static int do_susfs_sus_su(void __user *arg)
-{
-    return susfs_sus_su((struct st_sus_su __user *)arg);
-}
-#endif
+// SuSFS v2.0.0 uses prctl, so old ioctl handlers are removed.
 #endif
 
 #ifdef CONFIG_KSU_MANUAL_SU
@@ -951,40 +904,7 @@ static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
       .handler = do_get_sulog_dump,
       .perm_check = only_root },
 #ifdef CONFIG_KSU_SUSFS
-    { .cmd = CMD_SUSFS_ADD_SUS_PATH,
-      .name = "SUSFS_ADD_SUS_PATH",
-      .handler = do_susfs_add_sus_path,
-      .perm_check = always_allow },
-    { .cmd = CMD_SUSFS_ADD_SUS_MOUNT,
-      .name = "SUSFS_ADD_SUS_MOUNT",
-      .handler = do_susfs_add_sus_mount,
-      .perm_check = always_allow },
-    { .cmd = CMD_SUSFS_ADD_SUS_KSTAT,
-      .name = "SUSFS_ADD_SUS_KSTAT",
-      .handler = do_susfs_add_sus_kstat,
-      .perm_check = always_allow },
-    { .cmd = CMD_SUSFS_UPDATE_SUS_KSTAT,
-      .name = "SUSFS_UPDATE_SUS_KSTAT",
-      .handler = do_susfs_update_sus_kstat,
-      .perm_check = always_allow },
-    { .cmd = CMD_SUSFS_ADD_TRY_UMOUNT,
-      .name = "SUSFS_ADD_TRY_UMOUNT",
-      .handler = do_susfs_add_try_umount,
-      .perm_check = always_allow },
-    { .cmd = CMD_SUSFS_SET_UNAME,
-      .name = "SUSFS_SET_UNAME",
-      .handler = do_susfs_set_uname,
-      .perm_check = always_allow },
-    { .cmd = CMD_SUSFS_ENABLE_LOG,
-      .name = "SUSFS_ENABLE_LOG",
-      .handler = do_susfs_set_log,
-      .perm_check = always_allow },
-#ifdef CONFIG_KSU_SUSFS_SUS_SU
-    { .cmd = CMD_SUSFS_SUS_SU,
-      .name = "SUSFS_SUS_SU",
-      .handler = do_susfs_sus_su,
-      .perm_check = always_allow },
-#endif
+    // SuSFS v2.0.0 ioctl handlers removed
 #endif
     { .cmd = 0, .name = NULL, .handler = NULL, .perm_check = NULL } // Sentinel
 };
