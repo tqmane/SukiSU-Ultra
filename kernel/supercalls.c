@@ -101,6 +101,9 @@ static void ksu_susfs_build_features(char *buf, size_t buf_size)
 #ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
     pos = ksu_susfs_append_feature(buf, buf_size, pos, "SUS_KSTAT");
 #endif
+#ifdef CONFIG_KSU_SUSFS_SUS_OVERLAYFS
+    pos = ksu_susfs_append_feature(buf, buf_size, pos, "SUS_OVERLAYFS");
+#endif
 #ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
     pos = ksu_susfs_append_feature(buf, buf_size, pos, "TRY_UMOUNT");
 #endif
@@ -122,6 +125,12 @@ static void ksu_susfs_build_features(char *buf, size_t buf_size)
 #endif
 #ifdef CONFIG_KSU_SUSFS_SUS_SU
     pos = ksu_susfs_append_feature(buf, buf_size, pos, "SUS_SU");
+#endif
+#ifdef CONFIG_KSU_SUSFS_SUS_MAP
+    pos = ksu_susfs_append_feature(buf, buf_size, pos, "SUS_MAP");
+#endif
+#ifdef CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+    pos = ksu_susfs_append_feature(buf, buf_size, pos, "HIDE_KSU_SUSFS_SYMBOLS");
 #endif
 
     if (buf_size == 0)
@@ -749,7 +758,109 @@ static int do_enable_kpm(void __user *arg)
 
 // Susfs handlers
 #ifdef CONFIG_KSU_SUSFS
-// SuSFS v2.0.0 uses prctl, so old ioctl handlers are removed.
+static int do_susfs_add_sus_path(void __user *arg)
+{
+    susfs_add_sus_path((void __user **)&arg);
+    return 0;
+}
+
+static int do_susfs_add_sus_path_loop(void __user *arg)
+{
+    susfs_add_sus_path_loop((void __user **)&arg);
+    return 0;
+}
+
+static int do_susfs_set_android_data_root_path(void __user *arg)
+{
+    susfs_set_i_state_on_external_dir((void __user **)&arg);
+    return 0;
+}
+
+static int do_susfs_set_sdcard_root_path(void __user *arg)
+{
+    susfs_set_i_state_on_external_dir((void __user **)&arg);
+    return 0;
+}
+
+static int do_susfs_add_sus_mount(void __user *arg)
+{
+    // deprecated - not implemented in v2.0.0
+    return -ENOSYS;
+}
+
+static int do_susfs_hide_sus_mnts_for_all_procs(void __user *arg)
+{
+    susfs_set_hide_sus_mnts_for_all_procs((void __user **)&arg);
+    return 0;
+}
+
+static int do_susfs_add_sus_kstat(void __user *arg)
+{
+    susfs_add_sus_kstat((void __user **)&arg);
+    return 0;
+}
+
+static int do_susfs_update_sus_kstat(void __user *arg)
+{
+    susfs_update_sus_kstat((void __user **)&arg);
+    return 0;
+}
+
+static int do_susfs_add_sus_kstat_statically(void __user *arg)
+{
+    susfs_add_sus_kstat((void __user **)&arg);
+    return 0;
+}
+
+static int do_susfs_add_try_umount(void __user *arg)
+{
+    // deprecated - not implemented in v2.0.0
+    return -ENOSYS;
+}
+
+static int do_susfs_set_uname(void __user *arg)
+{
+    susfs_set_uname((void __user **)&arg);
+    return 0;
+}
+
+static int do_susfs_set_log(void __user *arg)
+{
+    susfs_enable_log((void __user **)&arg);
+    return 0;
+}
+
+static int do_susfs_set_cmdline_or_bootconfig(void __user *arg)
+{
+    susfs_set_cmdline_or_bootconfig((void __user **)&arg);
+    return 0;
+}
+
+static int do_susfs_add_open_redirect(void __user *arg)
+{
+    susfs_add_open_redirect((void __user **)&arg);
+    return 0;
+}
+
+static int do_susfs_enable_avc_log_spoofing(void __user *arg)
+{
+    susfs_set_avc_log_spoofing((void __user **)&arg);
+    return 0;
+}
+
+static int do_susfs_add_sus_map(void __user *arg)
+{
+    susfs_add_sus_map((void __user **)&arg);
+    return 0;
+}
+
+#ifdef CONFIG_KSU_SUSFS_SUS_SU
+static int do_susfs_sus_su(void __user *arg)
+{
+    // sus_su not available - deprecated
+    return -ENOSYS;
+}
+#endif
 #endif
 
 #ifdef CONFIG_KSU_MANUAL_SU
@@ -904,7 +1015,76 @@ static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
       .handler = do_get_sulog_dump,
       .perm_check = only_root },
 #ifdef CONFIG_KSU_SUSFS
-    // SuSFS v2.0.0 ioctl handlers removed
+    { .cmd = CMD_SUSFS_ADD_SUS_PATH,
+      .name = "SUSFS_ADD_SUS_PATH",
+      .handler = do_susfs_add_sus_path,
+      .perm_check = always_allow },
+    { .cmd = CMD_SUSFS_SET_ANDROID_DATA_ROOT_PATH,
+      .name = "SUSFS_SET_ANDROID_DATA_ROOT_PATH",
+      .handler = do_susfs_set_android_data_root_path,
+      .perm_check = always_allow },
+    { .cmd = CMD_SUSFS_SET_SDCARD_ROOT_PATH,
+      .name = "SUSFS_SET_SDCARD_ROOT_PATH",
+      .handler = do_susfs_set_sdcard_root_path,
+      .perm_check = always_allow },
+    { .cmd = CMD_SUSFS_ADD_SUS_PATH_LOOP,
+      .name = "SUSFS_ADD_SUS_PATH_LOOP",
+      .handler = do_susfs_add_sus_path_loop,
+      .perm_check = always_allow },
+    { .cmd = CMD_SUSFS_ADD_SUS_MOUNT,
+      .name = "SUSFS_ADD_SUS_MOUNT",
+      .handler = do_susfs_add_sus_mount,
+      .perm_check = always_allow },
+    { .cmd = CMD_SUSFS_HIDE_SUS_MNTS_FOR_ALL_PROCS,
+      .name = "SUSFS_HIDE_SUS_MNTS_FOR_ALL_PROCS",
+      .handler = do_susfs_hide_sus_mnts_for_all_procs,
+      .perm_check = always_allow },
+    { .cmd = CMD_SUSFS_ADD_SUS_KSTAT,
+      .name = "SUSFS_ADD_SUS_KSTAT",
+      .handler = do_susfs_add_sus_kstat,
+      .perm_check = always_allow },
+    { .cmd = CMD_SUSFS_UPDATE_SUS_KSTAT,
+      .name = "SUSFS_UPDATE_SUS_KSTAT",
+      .handler = do_susfs_update_sus_kstat,
+      .perm_check = always_allow },
+    { .cmd = CMD_SUSFS_ADD_SUS_KSTAT_STATICALLY,
+      .name = "SUSFS_ADD_SUS_KSTAT_STATICALLY",
+      .handler = do_susfs_add_sus_kstat_statically,
+      .perm_check = always_allow },
+    { .cmd = CMD_SUSFS_ADD_TRY_UMOUNT,
+      .name = "SUSFS_ADD_TRY_UMOUNT",
+      .handler = do_susfs_add_try_umount,
+      .perm_check = always_allow },
+    { .cmd = CMD_SUSFS_SET_UNAME,
+      .name = "SUSFS_SET_UNAME",
+      .handler = do_susfs_set_uname,
+      .perm_check = always_allow },
+    { .cmd = CMD_SUSFS_ENABLE_LOG,
+      .name = "SUSFS_ENABLE_LOG",
+      .handler = do_susfs_set_log,
+      .perm_check = always_allow },
+    { .cmd = CMD_SUSFS_SET_CMDLINE_OR_BOOTCONFIG,
+      .name = "SUSFS_SET_CMDLINE_OR_BOOTCONFIG",
+      .handler = do_susfs_set_cmdline_or_bootconfig,
+      .perm_check = always_allow },
+    { .cmd = CMD_SUSFS_ADD_OPEN_REDIRECT,
+      .name = "SUSFS_ADD_OPEN_REDIRECT",
+      .handler = do_susfs_add_open_redirect,
+      .perm_check = always_allow },
+    { .cmd = CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING,
+      .name = "SUSFS_ENABLE_AVC_LOG_SPOOFING",
+      .handler = do_susfs_enable_avc_log_spoofing,
+      .perm_check = always_allow },
+    { .cmd = CMD_SUSFS_ADD_SUS_MAP,
+      .name = "SUSFS_ADD_SUS_MAP",
+      .handler = do_susfs_add_sus_map,
+      .perm_check = always_allow },
+#ifdef CONFIG_KSU_SUSFS_SUS_SU
+    { .cmd = CMD_SUSFS_SUS_SU,
+      .name = "SUSFS_SUS_SU",
+      .handler = do_susfs_sus_su,
+      .perm_check = always_allow },
+#endif
 #endif
     { .cmd = 0, .name = NULL, .handler = NULL, .perm_check = NULL } // Sentinel
 };

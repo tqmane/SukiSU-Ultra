@@ -128,6 +128,20 @@ config KSU_SUSFS_HAS_MAGIC_MOUNT
     depends on KSU_SUSFS
     default y
 
+config KSU_SUSFS_SUS_MAP
+    bool "Enable to spoof memory mapping"
+    depends on KSU_SUSFS
+    default y
+    help
+        Spoof memory mappings in /proc/[pid]/maps and /proc/[pid]/smaps
+
+config KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+    bool "Hide KSU and SUSFS kernel symbols"
+    depends on KSU_SUSFS && KALLSYMS
+    default y
+    help
+        Hide KSU and SUSFS related symbols from /proc/kallsyms
+
 endmenu
 
 endmenu
