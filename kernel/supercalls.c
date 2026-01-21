@@ -854,6 +854,81 @@ static int do_susfs_add_sus_map(void __user *arg)
     return 0;
 }
 
+static int do_susfs_show_version(void __user *arg)
+{
+    struct st_susfs_version info = { 0 };
+    strscpy(info.susfs_version, SUSFS_VERSION, sizeof(info.susfs_version));
+    info.err = 0;
+    if (copy_to_user(arg, &info, sizeof(info)))
+        return -EFAULT;
+    return 0;
+}
+
+static int do_susfs_show_enabled_features(void __user *arg)
+{
+    struct st_susfs_enabled_features info = { 0 };
+    char *buf_ptr = info.enabled_features;
+    size_t pos = 0;
+
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+    pos = ksu_susfs_append_feature(buf_ptr, SUSFS_ENABLED_FEATURES_SIZE, pos, "SUS_PATH");
+#endif
+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+    pos = ksu_susfs_append_feature(buf_ptr, SUSFS_ENABLED_FEATURES_SIZE, pos, "SUS_MOUNT");
+#endif
+#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
+    pos = ksu_susfs_append_feature(buf_ptr, SUSFS_ENABLED_FEATURES_SIZE, pos, "SUS_KSTAT");
+#endif
+#ifdef CONFIG_KSU_SUSFS_SUS_OVERLAYFS
+    pos = ksu_susfs_append_feature(buf_ptr, SUSFS_ENABLED_FEATURES_SIZE, pos, "SUS_OVERLAYFS");
+#endif
+#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
+    pos = ksu_susfs_append_feature(buf_ptr, SUSFS_ENABLED_FEATURES_SIZE, pos, "TRY_UMOUNT");
+#endif
+#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
+    pos = ksu_susfs_append_feature(buf_ptr, SUSFS_ENABLED_FEATURES_SIZE, pos, "SPOOF_UNAME");
+#endif
+#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
+    pos = ksu_susfs_append_feature(buf_ptr, SUSFS_ENABLED_FEATURES_SIZE, pos, "OPEN_REDIRECT");
+#endif
+#ifdef CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+    pos = ksu_susfs_append_feature(buf_ptr, SUSFS_ENABLED_FEATURES_SIZE, pos, "SPOOF_CMDLINE_OR_BOOTCONFIG");
+#endif
+#ifdef CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT
+    pos = ksu_susfs_append_feature(buf_ptr, SUSFS_ENABLED_FEATURES_SIZE, pos, "HAS_MAGIC_MOUNT");
+#endif
+#ifdef CONFIG_KSU_SUSFS_ENABLE_LOG
+    pos = ksu_susfs_append_feature(buf_ptr, SUSFS_ENABLED_FEATURES_SIZE, pos, "ENABLE_LOG");
+#endif
+#ifdef CONFIG_KSU_SUSFS_SUS_SU
+    pos = ksu_susfs_append_feature(buf_ptr, SUSFS_ENABLED_FEATURES_SIZE, pos, "SUS_SU");
+#endif
+#ifdef CONFIG_KSU_SUSFS_SUS_MAP
+    pos = ksu_susfs_append_feature(buf_ptr, SUSFS_ENABLED_FEATURES_SIZE, pos, "SUS_MAP");
+#endif
+#ifdef CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+    pos = ksu_susfs_append_feature(buf_ptr, SUSFS_ENABLED_FEATURES_SIZE, pos, "HIDE_KSU_SUSFS_SYMBOLS");
+#endif
+
+    if (pos < SUSFS_ENABLED_FEATURES_SIZE)
+        buf_ptr[pos] = '\0';
+
+    info.err = 0;
+    if (copy_to_user(arg, &info, sizeof(info)))
+        return -EFAULT;
+    return 0;
+}
+
+static int do_susfs_show_variant(void __user *arg)
+{
+    struct st_susfs_variant info = { 0 };
+    strscpy(info.susfs_variant, SUSFS_VARIANT, sizeof(info.susfs_variant));
+    info.err = 0;
+    if (copy_to_user(arg, &info, sizeof(info)))
+        return -EFAULT;
+    return 0;
+}
+
 #ifdef CONFIG_KSU_SUSFS_SUS_SU
 static int do_susfs_sus_su(void __user *arg)
 {
@@ -1078,6 +1153,18 @@ static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
     { .cmd = CMD_SUSFS_ADD_SUS_MAP,
       .name = "SUSFS_ADD_SUS_MAP",
       .handler = do_susfs_add_sus_map,
+      .perm_check = always_allow },
+    { .cmd = CMD_SUSFS_SHOW_VERSION,
+      .name = "SUSFS_SHOW_VERSION",
+      .handler = do_susfs_show_version,
+      .perm_check = always_allow },
+    { .cmd = CMD_SUSFS_SHOW_ENABLED_FEATURES,
+      .name = "SUSFS_SHOW_ENABLED_FEATURES",
+      .handler = do_susfs_show_enabled_features,
+      .perm_check = always_allow },
+    { .cmd = CMD_SUSFS_SHOW_VARIANT,
+      .name = "SUSFS_SHOW_VARIANT",
+      .handler = do_susfs_show_variant,
       .perm_check = always_allow },
 #ifdef CONFIG_KSU_SUSFS_SUS_SU
     { .cmd = CMD_SUSFS_SUS_SU,
