@@ -18,6 +18,10 @@
 #include "objsec.h"
 #include "selinux/selinux.h"
 
+#ifdef CONFIG_KSU_SUSFS
+#include <linux/susfs.h>
+#endif
+
 struct cred *ksu_cred;
 
 void sukisu_custom_config_init(void)
@@ -60,6 +64,10 @@ int __init kernelsu_init(void)
     ksu_ksud_init();
 
     ksu_file_wrapper_init();
+
+#ifdef CONFIG_KSU_SUSFS
+    susfs_init();
+#endif
 
 #ifdef MODULE
 #ifndef CONFIG_KSU_DEBUG
