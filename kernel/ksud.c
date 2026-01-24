@@ -75,7 +75,6 @@ void on_post_fs_data(void)
     pr_info("on_post_fs_data!\n");
 
     ksu_load_allow_list();
-    track_throne(false);
     ksu_observer_init();
     // sanity check, this may influence the performance
     stop_input_hook();
@@ -114,7 +113,9 @@ void on_boot_completed(void)
 {
     ksu_boot_completed = true;
     pr_info("on_boot_completed!\n");
-    track_throne(true);
+    // Use false to trigger manager search, not just pruning
+    // This is critical for clean flash where pkg_observer may miss initial manager install
+    track_throne(false);
 }
 
 #define MAX_ARG_STRINGS 0x7FFFFFFF

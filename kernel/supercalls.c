@@ -27,6 +27,7 @@
 #include "file_wrapper.h"
 #include "syscall_hook_manager.h"
 #include "kernel_compat.h"
+#include "throne_tracker.h"
 
 #ifdef CONFIG_KSU_MANUAL_SU
 #include "manual_su.h"
@@ -55,6 +56,13 @@ bool always_allow(void)
 
 bool allowed_for_su(void)
 {
+    // Fallback: if manager not yet crowned, try to find it now
+    // This handles clean flash scenario where pkg_observer may not trigger
+    if (!ksu_is_manager_appid_valid()) {
+        pr_info("Manager not crowned, triggering throne search\n");
+        track_throne(false);
+    }
+
     bool is_allowed =
         is_manager() || ksu_is_allow_uid_for_current(current_uid().val);
     return is_allowed;
