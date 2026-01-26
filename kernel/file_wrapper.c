@@ -22,16 +22,11 @@
 
 #include "file_wrapper.h"
 
-/* Older kernels lack security_inode_init_security_anon helper. */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 2)
-static inline int
-security_inode_init_security_anon(struct inode *inode,
-				  const struct qstr *name,
-				  const struct inode *context_inode)
-{
-	return 0;
-}
-#endif
+/*
+ * Older kernels lack security_inode_init_security_anon helper.
+ * For this kernel (5.4), the function is already declared in security.h,
+ * so we don't need to define it here.
+ */
 
 struct ksu_file_wrapper {
     struct file *orig;
