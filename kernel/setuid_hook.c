@@ -10,7 +10,6 @@
 #include <linux/string.h>
 #include <linux/types.h>
 #include <linux/uaccess.h>
-#include <linux/sched/user.h>
 #include <linux/uidgid.h>
 
 #ifdef CONFIG_KSU_SUSFS
@@ -68,11 +67,7 @@ int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)
             spin_unlock_irq(&current->sighand->siglock);
         }
         ksu_set_task_tracepoint_flag(current);
-    } else if (ksu_is_manager_appid_valid()) {
-        // Only clear tracepoint flag when manager is already known.
-        // Before manager detection, keep the flag so that when
-        // throne_tracker discovers the manager, subsequent setresuid
-        // calls from the manager process can still be intercepted.
+    } else {
         ksu_clear_task_tracepoint_flag_if_needed(current);
     }
 

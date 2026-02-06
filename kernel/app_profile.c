@@ -11,11 +11,12 @@
 
 #include "allowlist.h"
 #include "app_profile.h"
+#include "kernel_compat.h"
 #include "klog.h" // IWYU pragma: keep
 #include "selinux/selinux.h"
+#include "su_mount_ns.h"
 #include "syscall_hook_manager.h"
 #include "sucompat.h"
-#include "kernel_compat.h"
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 7, 0)
 static struct group_info root_groups = { .usage = REFCOUNT_INIT(2) };
@@ -170,6 +171,8 @@ void escape_with_root_profile(void)
     for_each_thread (p, t) {
         ksu_set_task_tracepoint_flag(t);
     }
+
+    setup_mount_ns(profile->namespaces);
 }
 
 void escape_to_root_for_init(void)
@@ -239,7 +242,7 @@ static void disable_seccomp_for_task(struct task_struct *tsk)
     tsk->seccomp.mode = SECCOMP_MODE_DISABLED;
     tsk->seccomp.filter = NULL;
 #ifndef KSU_NO_SECCOMP_FILTER_COUNT
-        atomic_set(&tsk->seccomp.filter_count, 0);
+    atomic_set(&tsk->seccomp.filter_count, 0);
 #endif
     spin_unlock_irq(&tsk->sighand->siglock);
 
@@ -339,6 +342,7 @@ void escape_to_root_for_cmd_su(uid_t target_uid, pid_t target_pid)
     for_each_thread (p, t) {
         ksu_set_task_tracepoint_flag(t);
     }
+    setup_mount_ns(profile->namespaces);
     pr_info("cmd_su: privilege escalation completed for UID: %d, PID: %d\n",
             target_uid, target_pid);
 }

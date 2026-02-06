@@ -14,12 +14,11 @@
 #include "supercalls.h"
 #include "ksu.h"
 #include "file_wrapper.h"
-#include "app_profile.h"
-#include "objsec.h"
-#include "selinux/selinux.h"
 
 #ifdef CONFIG_KSU_SUSFS
 #include <linux/susfs.h>
+#include "selinux/selinux.h"
+#include "../../security/selinux/include/objsec.h"
 #endif
 
 struct cred *ksu_cred;

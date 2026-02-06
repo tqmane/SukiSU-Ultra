@@ -2,9 +2,9 @@
 #include <asm/pgtable.h>
 #include <linux/printk.h>
 #include <asm/current.h>
-#include "kernel_compat.h"
 
 #include "util.h"
+#include "kernel_compat.h"
 
 bool try_set_access_flag(unsigned long addr)
 {

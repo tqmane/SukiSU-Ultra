@@ -10,12 +10,12 @@ extern void ksu_seccomp_clear_cache(struct seccomp_filter *filter, int nr);
 extern void ksu_seccomp_allow_cache(struct seccomp_filter *filter, int nr);
 #else
 static inline void ksu_seccomp_clear_cache(struct seccomp_filter *filter,
-					   int nr)
+                                         int nr)
 {
 }
 
 static inline void ksu_seccomp_allow_cache(struct seccomp_filter *filter,
-					   int nr)
+                                         int nr)
 {
 }
 #endif

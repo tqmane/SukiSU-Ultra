@@ -10,20 +10,26 @@
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0)
 /* Older kernels don't provide copy_from_user_nofault helper. */
 static inline long copy_from_user_nofault(void *to, const void __user *from,
-					  unsigned long n)
+                                          unsigned long n)
 {
-	/*
-	 * copy_from_user returns number of uncopied bytes; convert to
-	 * 0/-EFAULT style used by newer nofault helper.
-	 */
-	return copy_from_user(to, from, n) ? -EFAULT : 0;
+        /*
+         * copy_from_user returns number of uncopied bytes; convert to
+         * 0/-EFAULT style used by newer nofault helper.
+         */
+        return copy_from_user(to, from, n) ? -EFAULT : 0;
 }
 
 static inline long strncpy_from_user_nofault(char *dst,
-					     const char __user *src,
-					     long count)
+                                             const char __user *src,
+                                             long count)
 {
-	return strncpy_from_user(dst, src, count);
+        return strncpy_from_user(dst, src, count);
+}
+
+static inline long copy_to_user_nofault(void __user *to, const void *from,
+                                        unsigned long n)
+{
+        return copy_to_user(to, from, n) ? -EFAULT : 0;
 }
 #endif
 

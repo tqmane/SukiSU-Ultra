@@ -27,7 +27,6 @@
 #include "file_wrapper.h"
 #include "syscall_hook_manager.h"
 #include "kernel_compat.h"
-#include "throne_tracker.h"
 
 #ifdef CONFIG_KSU_MANUAL_SU
 #include "manual_su.h"
@@ -56,13 +55,6 @@ bool always_allow(void)
 
 bool allowed_for_su(void)
 {
-    // Fallback: if manager not yet crowned, try to find it now
-    // This handles clean flash scenario where pkg_observer may not trigger
-    if (!ksu_is_manager_appid_valid()) {
-        pr_info("Manager not crowned, triggering throne search\n");
-        track_throne(false);
-    }
-
     bool is_allowed =
         is_manager() || ksu_is_allow_uid_for_current(current_uid().val);
     return is_allowed;
@@ -1366,23 +1358,7 @@ static int reboot_handler_pre(struct kprobe *p, struct pt_regs *regs)
     int cmd = (int)PT_REGS_PARM3(real_regs);
     void __user **arg = (void __user **)&PT_REGS_SYSCALL_PARM4(real_regs);
 
-    int handled = ksu_handle_sys_reboot(magic1, magic2, cmd, arg);
-
-#if defined(__aarch64__)
-    if (handled) {
-        /*
-         * We must change the kprobe context regs (kernel regs), not the
-         * userspace pt_regs passed into __arm64_sys_* wrappers.
-         */
-        PT_REGS_RC(regs) = 0;
-        PT_REGS_IP(regs) = PT_REGS_RET(regs);
-        return 1;
-    }
-#else
-    (void)handled;
-#endif
-
-    return 0;
+    return ksu_handle_sys_reboot(magic1, magic2, cmd, arg);
 }
 
 static struct kprobe reboot_kp = {
