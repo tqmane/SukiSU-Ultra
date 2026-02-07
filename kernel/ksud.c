@@ -428,6 +428,51 @@ skip:
     fput(file);
 }
 
+#ifdef CONFIG_KSU_MANUAL_HOOK
+/*
+ * Manual hook wrapper functions for non-GKI kernels.
+ * These are called directly from VFS syscall implementations.
+ */
+
+bool ksu_init_rc_hook __read_mostly = true;
+
+int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,
+                        void *envp, int *flags)
+{
+    int ret = 0;
+
+    // Call ksud handler first (for init second stage and zygote detection)
+    ret =
+        ksu_handle_execveat_ksud(fd, filename_ptr, (struct user_arg_ptr *)argv,
+                                 (struct user_arg_ptr *)envp, flags);
+
+    // Then call sucompat handler (for su path redirection)
+    if (filename_ptr && *filename_ptr) {
+        const char __user *filename_user =
+            (const char __user *)(*filename_ptr)->name;
+        ksu_handle_execve_sucompat(&filename_user, argv, envp, flags);
+    }
+
+    return ret;
+}
+
+__attribute__((cold)) int ksu_handle_sys_read_manual(unsigned int fd,
+                                                     char __user **buf_ptr,
+                                                     size_t *count_ptr)
+{
+    ksu_handle_sys_read(fd);
+    return 0;
+}
+
+int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd,
+                          void __user **arg)
+{
+    // This hook is used for safe mode detection and other purposes
+    // Currently a stub - the actual functionality is handled elsewhere
+    return 0;
+}
+#endif /* CONFIG_KSU_MANUAL_HOOK */
+
 static unsigned int volumedown_pressed_count = 0;
 
 static bool is_volumedown_enough(unsigned int count)
