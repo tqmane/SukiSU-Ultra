@@ -27,11 +27,7 @@
 #include "kernel_umount.h"
 #include "kernel_compat.h"
 
-static void ksu_install_manager_fd_tw_func(struct callback_head *cb)
-{
-    ksu_install_fd();
-    kfree(cb);
-}
+extern void disable_seccomp(void);
 
 int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)
 {
@@ -40,6 +36,7 @@ int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)
 
     pr_info("handle_setresuid from %d to %d\n", old_uid, new_uid);
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
     if (likely(ksu_is_manager_appid_valid()) &&
         unlikely(ksu_get_manager_appid() == new_uid % PER_USER_RANGE)) {
         spin_lock_irq(&current->sighand->siglock);
@@ -48,14 +45,7 @@ int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)
         spin_unlock_irq(&current->sighand->siglock);
 
         pr_info("install fd for manager: %d\n", new_uid);
-        struct callback_head *cb = kzalloc(sizeof(*cb), GFP_ATOMIC);
-        if (!cb)
-            return 0;
-        cb->func = ksu_install_manager_fd_tw_func;
-        if (task_work_add(current, cb, TWA_RESUME)) {
-            kfree(cb);
-            pr_warn("install manager fd add task_work failed\n");
-        }
+        ksu_install_fd();
         return 0;
     }
 
@@ -70,6 +60,18 @@ int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)
     } else {
         ksu_clear_task_tracepoint_flag_if_needed(current);
     }
+#else /* LINUX_VERSION_CODE < 5.10.0 */
+    if (ksu_is_allow_uid_for_current(new_uid)) {
+        disable_seccomp();
+
+        if (ksu_is_manager_appid_valid() &&
+            ksu_get_manager_appid() == new_uid % PER_USER_RANGE) {
+            pr_info("install fd for ksu manager(uid=%d)\n", new_uid);
+            ksu_install_fd();
+        }
+        return 0;
+    }
+#endif
 
     // Handle kernel umount
     ksu_handle_umount(old_uid, new_uid);

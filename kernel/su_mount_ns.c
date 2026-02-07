@@ -21,28 +21,6 @@
 #include "su_mount_ns.h"
 #include "kernel_compat.h"
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
-extern int path_mount(const char *dev_name, struct path *path,
-                      const char *type_page, unsigned long flags,
-                      void *data_page);
-#else
-/*
- * path_mount doesn't exist before 5.12.
- * Use do_mount via user-space path as a fallback.
- */
-static int path_mount(const char *dev_name, struct path *path,
-                      const char *type_page, unsigned long flags,
-                      void *data_page)
-{
-    char buf[PATH_MAX];
-    char *p = d_path(path, buf, sizeof(buf));
-    if (IS_ERR(p))
-        return PTR_ERR(p);
-    return do_mount(dev_name, (const char __user __force *)p,
-                    type_page, flags, data_page);
-}
-#endif
-
 #if defined(__aarch64__)
 extern long __arm64_sys_setns(const struct pt_regs *regs);
 #elif defined(__x86_64__)
@@ -136,11 +114,7 @@ try_setns:
     fd_install(fd, ns_file);
     ret = ksu_sys_setns(fd, CLONE_NEWNS);
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 11, 0)
-    ksys_close(fd);
-#else
-    close_fd(fd);
-#endif
+    do_close_fd(fd);
 
     if (ret) {
         pr_warn("call setns failed: %ld\n", ret);

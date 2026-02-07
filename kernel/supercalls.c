@@ -1191,7 +1191,7 @@ static void ksu_install_fd_tw_func(struct callback_head *cb)
     if (copy_to_user(tw->outp, &fd, sizeof(fd))) {
         pr_err("install ksu fd reply err\n");
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
-        close_fd(fd);
+        do_close_fd(fd);
 #else
         ksys_close(fd);
 #endif
@@ -1358,7 +1358,8 @@ static int reboot_handler_pre(struct kprobe *p, struct pt_regs *regs)
     int cmd = (int)PT_REGS_PARM3(real_regs);
     void __user **arg = (void __user **)&PT_REGS_SYSCALL_PARM4(real_regs);
 
-    return ksu_handle_sys_reboot(magic1, magic2, cmd, arg);
+    ksu_handle_sys_reboot(magic1, magic2, cmd, arg);
+    return 0;
 }
 
 static struct kprobe reboot_kp = {

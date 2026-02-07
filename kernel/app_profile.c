@@ -74,7 +74,7 @@ static inline void ksu_seccomp_filter_release(struct task_struct *tsk)
 }
 #endif
 
-static void disable_seccomp(void)
+void disable_seccomp(void)
 {
     struct task_struct *fake;
 
