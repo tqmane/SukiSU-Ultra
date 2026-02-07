@@ -27,6 +27,7 @@
 #include "file_wrapper.h"
 #include "syscall_hook_manager.h"
 #include "kernel_compat.h"
+#include "throne_tracker.h"
 
 #ifdef CONFIG_KSU_MANUAL_SU
 #include "manual_su.h"
@@ -1185,6 +1186,15 @@ static void ksu_install_fd_tw_func(struct callback_head *cb)
 {
     struct ksu_install_fd_tw *tw =
         container_of(cb, struct ksu_install_fd_tw, cb);
+
+    // Fresh install fix: if the manager has not been identified yet,
+    // run the throne tracker now so that subsequent IOCTL permission
+    // checks (is_manager()) can succeed.
+    if (!ksu_is_manager_appid_valid()) {
+        pr_info("ksu: manager not yet identified, running throne tracker\n");
+        track_throne(false);
+    }
+
     int fd = ksu_install_fd();
     pr_info("[%d] install ksu fd: %d\n", current->pid, fd);
 

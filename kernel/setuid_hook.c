@@ -61,14 +61,20 @@ int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)
         ksu_clear_task_tracepoint_flag_if_needed(current);
     }
 #else /* LINUX_VERSION_CODE < 5.10.0 */
+    // Fix: Manager fd installation must NOT be gated behind the allowlist
+    // check. On fresh install, the manager is not in the allowlist yet, so
+    // seccomp would never be disabled and the fd would never be installed.
+    // This mirrors the 5.10+ path which separates manager and allowlist checks.
+    if (ksu_is_manager_appid_valid() &&
+        ksu_get_manager_appid() == new_uid % PER_USER_RANGE) {
+        disable_seccomp();
+        pr_info("install fd for ksu manager(uid=%d)\n", new_uid);
+        ksu_install_fd();
+        return 0;
+    }
+
     if (ksu_is_allow_uid_for_current(new_uid)) {
         disable_seccomp();
-
-        if (ksu_is_manager_appid_valid() &&
-            ksu_get_manager_appid() == new_uid % PER_USER_RANGE) {
-            pr_info("install fd for ksu manager(uid=%d)\n", new_uid);
-            ksu_install_fd();
-        }
         return 0;
     }
 #endif
