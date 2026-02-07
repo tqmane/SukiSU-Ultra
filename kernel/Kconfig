@@ -22,6 +22,14 @@ config KSU_MANUAL_SU
     help
       Use manual su and authorize the corresponding command line and application via prctl
 
+config KSU_MANUAL_HOOK
+    bool "Use manual hooks for syscalls"
+    depends on KSU
+    default n
+    help
+      Enable manual hooks for syscalls instead of relying on auto-hooking.
+      Required for ReSukiSU integration on older kernels or custom configurations.
+
 config KPM
     bool "Enable SukiSU KPM"
     depends on KSU && 64BIT
