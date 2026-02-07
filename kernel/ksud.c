@@ -28,6 +28,7 @@
 #include "selinux/selinux.h"
 #include "throne_tracker.h"
 #include "kernel_compat.h"
+#include "sucompat.h"
 
 bool ksu_module_mounted __read_mostly = false;
 bool ksu_boot_completed __read_mostly = false;
@@ -461,14 +462,6 @@ __attribute__((cold)) int ksu_handle_sys_read_manual(unsigned int fd,
                                                      size_t *count_ptr)
 {
     ksu_handle_sys_read(fd);
-    return 0;
-}
-
-int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd,
-                          void __user **arg)
-{
-    // This hook is used for safe mode detection and other purposes
-    // Currently a stub - the actual functionality is handled elsewhere
     return 0;
 }
 #endif /* CONFIG_KSU_MANUAL_HOOK */
