@@ -116,6 +116,9 @@
     <string name="install_only_support_ko_file">.ko ファイルのみ対応しています</string>
     <string name="select_file_tip">%1$s のパーティションイメージを推奨します。</string>
     <string name="select_kmi">KMI を選択してください</string>
+    <string name="select_file_tip_nogki">パッチしたい GKI デバイスのイメージファイルを選択してください</string>
+    <string name="current_kmi">この端末の KMI バージョン: %s</string>
+    <string name="current_device_kmi">この端末の KMI</string>
     <string name="settings_uninstall">アンインストール</string>
     <string name="settings_uninstall_temporary">一時的にアンインストールする</string>
     <string name="settings_uninstall_permanent">完全にアンインストールする</string>

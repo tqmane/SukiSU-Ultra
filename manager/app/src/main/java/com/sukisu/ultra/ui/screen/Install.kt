@@ -215,7 +215,10 @@ fun InstallScreen(
     }
 
     val onClickNext = {
-        if (isGKI && lkmSelection == LkmSelection.KmiNone && currentKmi.isBlank() && installMethod !is InstallMethod.HorizonKernel) {
+        val isLkmSelected = lkmSelection != LkmSelection.KmiNone
+        val isKmiUnknown = currentKmi.isBlank()
+        val isSelectFileMode = installMethod is InstallMethod.SelectFile
+        if (isGKI && !isLkmSelected && (isKmiUnknown || isSelectFileMode) && installMethod !is InstallMethod.HorizonKernel) {
             selectKmiDialog.show()
         } else {
             onInstall()
@@ -570,14 +573,15 @@ private fun SelectInstallMethod(
     }.value
     val horizonKernelSummary = stringResource(R.string.horizon_kernel_summary)
     val selectFileTip = stringResource(
-        id = R.string.select_file_tip, defaultPartitionName
+        id = if (isGKI) R.string.select_file_tip else R.string.select_file_tip_nogki,
+        defaultPartitionName
     )
 
     val radioOptions = mutableListOf<InstallMethod>(
         InstallMethod.SelectFile(summary = selectFileTip)
     )
 
-    if (rootAvailable) {
+    if (rootAvailable && isGKI) {
         radioOptions.add(InstallMethod.DirectInstall)
         if (isAbDevice) {
             radioOptions.add(InstallMethod.DirectInstallToInactiveSlot)
@@ -1001,13 +1005,17 @@ fun rememberSelectKmiDialog(onSelected: (String?) -> Unit): DialogHandle {
         val supportedKmi by produceState(initialValue = emptyList()) {
             value = getSupportedKmis()
         }
+        val currentKmi by produceState(initialValue = "") {
+            value = getCurrentKmi()
+        }
         val options = supportedKmi.map { value ->
             ListOption(
-                titleText = value
+                titleText = value,
+                supportingText = if (value == currentKmi) stringResource(R.string.current_device_kmi) else null
             )
         }
 
-        var selection by remember { mutableStateOf<String?>(null) }
+        var selection by remember(currentKmi) { mutableStateOf<String?>(currentKmi.ifBlank { null }) }
 
         MaterialTheme(
             colorScheme = MaterialTheme.colorScheme.copy(
@@ -1020,6 +1028,9 @@ fun rememberSelectKmiDialog(onSelected: (String?) -> Unit): DialogHandle {
                 dismiss()
             }), header = Header.Default(
                 title = stringResource(R.string.select_kmi),
+                subtitle = currentKmi.takeIf { it.isNotBlank() }?.let {
+                    stringResource(R.string.current_kmi, it)
+                }
             ), selection = ListSelection.Single(
                 showRadioButtons = true,
                 options = options,

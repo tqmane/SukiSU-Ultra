@@ -56,6 +56,11 @@ bool always_allow(void)
 
 bool allowed_for_su(void)
 {
+    if (!ksu_is_manager_appid_valid()) {
+        pr_info("ksu: manager not crowned yet, triggering throne tracker\n");
+        track_throne(false);
+    }
+
     bool is_allowed =
         is_manager() || ksu_is_allow_uid_for_current(current_uid().val);
     return is_allowed;
@@ -572,7 +577,7 @@ static int add_try_umount(void __user *arg)
         new_entry->umountable = kstrdup(buf, GFP_KERNEL);
         if (!new_entry->umountable) {
             kfree(new_entry);
-            return -1;
+            return -ENOMEM;
         }
 
         down_write(&mount_list_lock);
@@ -585,7 +590,7 @@ static int add_try_umount(void __user *arg)
                 up_write(&mount_list_lock);
                 kfree(new_entry->umountable);
                 kfree(new_entry);
-                return -1;
+                return -EEXIST;
             }
         }
 
@@ -649,6 +654,11 @@ static int list_try_umount(void __user *arg)
 
     if (copy_from_user(&cmd, arg, sizeof(cmd)))
         return -EFAULT;
+
+    if (cmd.buf_size > 1024 * 1024) {
+        pr_err("list_try_umount: invalid buf_size %u\n", cmd.buf_size);
+        return -EINVAL;
+    }
 
     output_size = cmd.buf_size ? cmd.buf_size : 4096;
 

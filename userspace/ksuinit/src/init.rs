@@ -2,13 +2,13 @@ use std::io::{ErrorKind, Write};
 
 use crate::loader::load_module;
 use anyhow::Result;
-use rustix::fs::{Mode, symlink, unlink};
+use rustix::fs::{symlink, unlink, Mode};
 use rustix::{
     fd::AsFd,
-    fs::{Access, CWD, FileType, access, makedev, mkdir, mknodat},
+    fs::{access, makedev, mkdir, mknodat, Access, FileType, CWD},
     mount::{
-        FsMountFlags, FsOpenFlags, MountAttrFlags, MoveMountFlags, UnmountFlags, fsconfig_create,
-        fsmount, fsopen, move_mount, unmount,
+        fsconfig_create, fsmount, fsopen, move_mount, unmount, FsMountFlags, FsOpenFlags,
+        MountAttrFlags, MoveMountFlags, UnmountFlags,
     },
 };
 
@@ -27,11 +27,10 @@ impl Drop for AutoUmount {
 }
 
 fn mount_filesystem(name: &str, mountpoint: &str) -> Result<()> {
-    mkdir(mountpoint, Mode::from_raw_mode(0o755))
-        .or_else(|err| match err.kind() {
-            ErrorKind::AlreadyExists => Ok(()),
-            _ => Err(err),
-        })?;
+    mkdir(mountpoint, Mode::from_raw_mode(0o755)).or_else(|err| match err.kind() {
+        ErrorKind::AlreadyExists => Ok(()),
+        _ => Err(err),
+    })?;
     let fs_fd = fsopen(name, FsOpenFlags::FSOPEN_CLOEXEC)?;
     fsconfig_create(fs_fd.as_fd())?;
     let mount_fd = fsmount(
@@ -134,7 +133,7 @@ pub fn init() -> Result<()> {
 }
 
 fn has_kernelsu_legacy() -> bool {
-    use syscalls::{Sysno, syscall};
+    use syscalls::{syscall, Sysno};
     let mut version = 0;
     const CMD_GET_VERSION: i32 = 2;
     unsafe {
@@ -152,7 +151,7 @@ fn has_kernelsu_legacy() -> bool {
 }
 
 fn has_kernelsu_v2() -> bool {
-    use syscalls::{Sysno, syscall};
+    use syscalls::{syscall, Sysno};
     const KSU_INSTALL_MAGIC1: u32 = 0xDEADBEEF;
     const KSU_INSTALL_MAGIC2: u32 = 0xCAFEBABE;
     const KSU_IOCTL_GET_INFO: u32 = 0x80004b02; // _IOC(_IOC_READ, 'K', 2, 0)
@@ -162,6 +161,7 @@ fn has_kernelsu_v2() -> bool {
     struct GetInfoCmd {
         version: u32,
         flags: u32,
+        features: u32,
     }
 
     // Try new method: get driver fd using reboot syscall with magic numbers

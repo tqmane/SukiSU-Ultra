@@ -360,9 +360,7 @@ private fun StatusCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable {
-                    if (systemStatus.isRootAvailable || systemStatus.kernelVersion.isGKI()) {
-                        onClickInstall()
-                    }
+                    onClickInstall()
                 }
                 .padding(24.dp),
             verticalAlignment = Alignment.CenterVertically

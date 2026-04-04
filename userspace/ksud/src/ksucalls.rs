@@ -27,6 +27,7 @@ const KSU_IOCTL_ADD_TRY_UMOUNT: i32 = _IOW::<()>(K, 18);
 struct GetInfoCmd {
     version: u32,
     flags: u32,
+    features: u32,
 }
 
 #[repr(C)]
@@ -141,7 +142,11 @@ fn init_driver_fd() -> Option<RawFd> {
                 &mut fd,
             );
         };
-        if fd >= 0 { Some(fd) } else { None }
+        if fd >= 0 {
+            Some(fd)
+        } else {
+            None
+        }
     } else {
         fd
     }
@@ -168,6 +173,7 @@ fn get_info() -> GetInfoCmd {
         let mut cmd = GetInfoCmd {
             version: 0,
             flags: 0,
+            features: 0,
         };
         let _ = ksuctl(KSU_IOCTL_GET_INFO, &raw mut cmd);
         cmd
@@ -336,6 +342,7 @@ const SULOG_BUFSIZ: usize = SULOG_ENTRY_MAX * SULOG_ENTRY_SIZE;
 struct ListTryUmountCmd {
     arg: u64,
     buf_size: u32,
+    _padding: u32,
 }
 
 /// List all mount points in umount list
@@ -345,6 +352,7 @@ pub fn umount_list_list() -> anyhow::Result<String> {
     let mut cmd = ListTryUmountCmd {
         arg: buffer.as_mut_ptr() as u64,
         buf_size: BUF_SIZE as u32,
+        _padding: 0,
     };
     ksuctl(KSU_IOCTL_LIST_TRY_UMOUNT, &raw mut cmd)?;
 

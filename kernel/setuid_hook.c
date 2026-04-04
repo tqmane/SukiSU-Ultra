@@ -14,11 +14,13 @@
 
 #ifdef CONFIG_KSU_SUSFS
 #include <linux/susfs.h>
+#include <linux/susfs_def.h>
 #endif
 
 #include "allowlist.h"
 #include "setuid_hook.h"
 #include "klog.h" // IWYU pragma: keep
+#include "ksu.h"
 #include "manager.h"
 #include "selinux/selinux.h"
 #include "seccomp_cache.h"
@@ -28,6 +30,56 @@
 #include "kernel_compat.h"
 
 extern void disable_seccomp(void);
+
+#ifdef CONFIG_KSU_SUSFS
+struct susfs_handle_setuid_tw {
+    struct callback_head cb;
+};
+
+static void susfs_handle_setuid_tw_func(struct callback_head *cb)
+{
+    struct susfs_handle_setuid_tw *tw =
+        container_of(cb, struct susfs_handle_setuid_tw, cb);
+    const struct cred *saved;
+
+    if (!ksu_cred) {
+        kfree(tw);
+        return;
+    }
+
+    saved = override_creds(ksu_cred);
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+    susfs_run_sus_path_loop(current_uid().val);
+#endif
+    revert_creds(saved);
+    kfree(tw);
+}
+
+static void ksu_handle_extra_susfs_work(uid_t new_uid)
+{
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+    struct susfs_handle_setuid_tw *tw;
+
+    if (!is_appuid(new_uid) && !is_isolated_process(new_uid))
+        return;
+
+    tw = kzalloc(sizeof(*tw), GFP_ATOMIC);
+    if (!tw) {
+        pr_err("susfs: failed to allocate task_work\n");
+        return;
+    }
+
+    tw->cb.func = susfs_handle_setuid_tw_func;
+    if (task_work_add(current, &tw->cb, TWA_RESUME)) {
+        kfree(tw);
+        pr_err("susfs: failed adding task_work\n");
+    }
+#endif
+
+    if (is_appuid(new_uid) || is_isolated_process(new_uid))
+        susfs_set_current_proc_umounted();
+}
+#endif
 
 int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)
 {
@@ -81,6 +133,14 @@ int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)
 
     // Handle kernel umount
     ksu_handle_umount(old_uid, new_uid);
+
+#ifdef CONFIG_KSU_SUSFS
+    if (ksu_is_manager_appid_valid() && is_zygote(get_current_cred()) &&
+        (is_appuid(new_uid) || is_isolated_process(new_uid)) &&
+        (ksu_uid_should_umount(new_uid) || is_isolated_process(new_uid))) {
+        ksu_handle_extra_susfs_work(new_uid);
+    }
+#endif
 
     return 0;
 }
