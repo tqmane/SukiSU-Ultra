@@ -1,21 +1,17 @@
 package com.sukisu.ultra
 
 import android.app.Application
+import android.content.pm.ApplicationInfo
+import android.os.Build
+import android.os.UserManager
 import android.system.Os
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import com.sukisu.ultra.ui.viewmodel.SuperUserViewModel
-import coil.Coil
-import coil.ImageLoader
-import com.dergoogler.mmrl.platform.Platform
-import me.zhanghai.android.appiconloader.coil.AppIconFetcher
-import me.zhanghai.android.appiconloader.coil.AppIconKeyer
 import okhttp3.Cache
 import okhttp3.OkHttpClient
+import org.lsposed.hiddenapibypass.HiddenApiBypass
 import java.io.File
 import java.util.Locale
 
@@ -23,31 +19,40 @@ lateinit var ksuApp: KernelSUApplication
 
 class KernelSUApplication : Application(), ViewModelStoreOwner {
 
+    companion object {
+        fun setEnableOnBackInvokedCallback(appInfo: ApplicationInfo, enable: Boolean) {
+            runCatching {
+                val applicationInfoClass = ApplicationInfo::class.java
+                val method = applicationInfoClass.getDeclaredMethod("setEnableOnBackInvokedCallback", Boolean::class.javaPrimitiveType)
+                method.isAccessible = true
+                method.invoke(appInfo, enable)
+            }
+        }
+    }
+
     lateinit var okhttpClient: OkHttpClient
     private val appViewModelStore by lazy { ViewModelStore() }
+
+    private fun isUserUnlocked(): Boolean =
+        getSystemService(UserManager::class.java)?.isUserUnlocked == true
 
     override fun onCreate() {
         super.onCreate()
         ksuApp = this
 
-        // For faster response when first entering superuser or webui activity
-        val superUserViewModel = ViewModelProvider(this)[SuperUserViewModel::class.java]
-        CoroutineScope(Dispatchers.Main).launch {
-            superUserViewModel.fetchAppList()
+        if (!isUserUnlocked()) {
+            return
         }
 
-        Platform.setHiddenApiExemptions()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val prefs = this.getSharedPreferences("settings", MODE_PRIVATE)
+            val enable = prefs.getBoolean("enable_predictive_back", false)
+            HiddenApiBypass.addHiddenApiExemptions("Landroid/content/pm/ApplicationInfo;->setEnableOnBackInvokedCallback")
+            setEnableOnBackInvokedCallback(applicationInfo, enable)
+        }
 
-        val context = this
-        val iconSize = resources.getDimensionPixelSize(android.R.dimen.app_icon_size)
-        Coil.setImageLoader(
-            ImageLoader.Builder(context)
-                .components {
-                    add(AppIconKeyer())
-                    add(AppIconFetcher.Factory(iconSize, false, context))
-                }
-                .build()
-        )
+        val superUserViewModel = ViewModelProvider(this)[SuperUserViewModel::class.java]
+        superUserViewModel.loadAppList()
 
         val webroot = File(dataDir, "webroot")
         if (!webroot.exists()) {
@@ -67,6 +72,7 @@ class KernelSUApplication : Application(), ViewModelStoreOwner {
                     )
                 }.build()
     }
+
     override val viewModelStore: ViewModelStore
         get() = appViewModelStore
 }

@@ -2,7 +2,7 @@
 <img align='right' src='SukiSU-mini.svg' width='220px' alt="sukisu logo">
 
 
-[English](../README.md) | **简体中文** | [日本語](../ja/README.md) | [Türkçe](../tr/README.md) | [Русский](../ru/README.md)
+[English](../README.md) | **简体中文** | [日本語](../ja/README.md) | [Türkçe](../tr/README.md)
 
 一个 Android 上基于内核的 root 方案，由 [`tiann/KernelSU`](https://github.com/tiann/KernelSU) 分叉而来，添加了一些有趣的变更。
 
@@ -14,11 +14,10 @@
 ## 特性
 
 1. 基于内核的 `su` 和权限管理。
-2. 基于 [Magic Mount](https://github.com/5ec1cff/KernelSU) 的模块系统。
-3. [App Profile](https://kernelsu.org/zh_CN/guide/app-profile.html): 把 Root 权限关进笼子里。
-4. 支持 non-GKI 与 GKI 1.0。
-5. KPM 支持
-6. 可调整管理器外观，可自定义 susfs 配置。
+2. [App Profile](https://kernelsu.org/zh_CN/guide/app-profile.html): 把 Root 权限关进笼子里。
+3. 支持 non-GKI 与 GKI 1.0。
+4. KPM 支持
+5. 可调整管理器外观，可自定义 susfs 配置。
 
 ## 兼容状态
 

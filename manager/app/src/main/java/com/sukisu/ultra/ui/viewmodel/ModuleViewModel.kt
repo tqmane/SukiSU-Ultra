@@ -1,522 +1,491 @@
 package com.sukisu.ultra.ui.viewmodel
 
-import android.content.Context
 import android.os.SystemClock
 import android.util.Log
-import androidx.compose.runtime.derivedStateOf
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
+import androidx.core.content.edit
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.dergoogler.mmrl.platform.model.ModuleConfig
-import com.dergoogler.mmrl.platform.model.ModuleConfig.Companion.asModuleConfig
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import com.sukisu.ultra.ui.util.HanziToPinyin
-import com.sukisu.ultra.ui.util.listModules
-import com.sukisu.ultra.ui.util.getRootShell
-import com.sukisu.ultra.ui.util.module.ModuleVerificationManager
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
-import org.json.JSONObject
+import kotlinx.coroutines.withTimeoutOrNull
+import com.sukisu.ultra.Natives
+import com.sukisu.ultra.R
+import com.sukisu.ultra.data.model.Module
+import com.sukisu.ultra.data.model.ModuleUpdateInfo
+import com.sukisu.ultra.data.repository.ModuleRepository
+import com.sukisu.ultra.data.repository.ModuleRepositoryImpl
+import com.sukisu.ultra.ksuApp
+import com.sukisu.ultra.ui.component.SearchStatus
+import com.sukisu.ultra.ui.screen.module.ModuleConfirmDialogState
+import com.sukisu.ultra.ui.screen.module.ModuleConfirmRequest
+import com.sukisu.ultra.ui.screen.module.ModuleEffect
+import com.sukisu.ultra.ui.screen.module.ModuleUiState
+import com.sukisu.ultra.ui.util.hasMagisk
+import com.sukisu.ultra.ui.util.module.fetchModuleDetail
+import com.sukisu.ultra.ui.util.module.fetchReleaseDescriptionHtml
+import okhttp3.Request
 import java.text.Collator
-import java.text.DecimalFormat
 import java.util.Locale
-import java.util.concurrent.TimeUnit
-import kotlin.math.log10
-import kotlin.math.pow
-import androidx.core.content.edit
+import com.sukisu.ultra.ui.util.toggleModule as toggleModuleUtil
+import com.sukisu.ultra.ui.util.undoUninstallModule as undoUninstallModuleUtil
+import com.sukisu.ultra.ui.util.uninstallModule as uninstallModuleUtil
 
-/**
- * @author ShirkNeko
- * @date 2025/5/31.
- */
-class ModuleViewModel : ViewModel() {
-
+class ModuleViewModel(
+    private val repo: ModuleRepository = ModuleRepositoryImpl()
+) : ViewModel() {
+    
     companion object {
         private const val TAG = "ModuleViewModel"
-        private var modules by mutableStateOf<List<ModuleInfo>>(emptyList())
-        private const val CUSTOM_USER_AGENT = "SukiSU-Ultra/2.0"
     }
 
-    // 模块大小缓存管理器
-    private lateinit var moduleSizeCache: ModuleSizeCache
-
-    fun initializeCache(context: Context) {
-        if (!::moduleSizeCache.isInitialized) {
-            moduleSizeCache = ModuleSizeCache(context)
-        }
-    }
-
-    fun getModuleSize(dirId: String): String {
-        if (!::moduleSizeCache.isInitialized) {
-            return "0 KB"
-        }
-        val size = moduleSizeCache.getModuleSize(dirId)
-        return formatFileSize(size)
-    }
-
-    /**
-     * 刷新所有模块的大小缓存
-     * 只在安装、卸载、更新模块后调用
-     */
-    fun refreshModuleSizeCache() {
-        if (!::moduleSizeCache.isInitialized) return
-
-        viewModelScope.launch(Dispatchers.IO) {
-            Log.d(TAG, "开始刷新模块大小缓存")
-            val currentModules = modules.map { it.dirId }
-            moduleSizeCache.refreshCache(currentModules)
-            Log.d(TAG, "模块大小缓存刷新完成")
-        }
-    }
-
-    class ModuleInfo(
-        val id: String,
-        val name: String,
-        val author: String,
-        val version: String,
-        val versionCode: Int,
-        val description: String,
+    private data class ModuleUpdateSignature(
+        val updateJson: String,
+        val versionCode: Long,
         val enabled: Boolean,
         val update: Boolean,
-        val remove: Boolean,
-        val updateJson: String,
-        val hasWebUi: Boolean,
-        val hasActionScript: Boolean,
-        val metamodule: Boolean,
-        val dirId: String, // real module id (dir name)
-        var config: ModuleConfig? = null,
-        var isVerified: Boolean = false, // 添加验证状态字段
-        var verificationTimestamp: Long = 0L, // 添加验证时间戳
+        val remove: Boolean
     )
 
-    var isRefreshing by mutableStateOf(false)
-        private set
-    var search by mutableStateOf("")
+    private data class ModuleUpdateCache(
+        val signature: ModuleUpdateSignature,
+        val info: ModuleUpdateInfo
+    )
 
-    var sortEnabledFirst by mutableStateOf(false)
-    var sortActionFirst by mutableStateOf(false)
-    val moduleList by derivedStateOf {
-        val comparator =
-            compareBy<ModuleInfo>(
-                {
-                    val executable = it.hasWebUi || it.hasActionScript
-                    when {
-                        it.metamodule && it.enabled -> 0
-                        sortEnabledFirst && sortActionFirst -> when {
-                            it.enabled && executable -> 1
-                            it.enabled -> 2
-                            executable -> 3
-                            else -> 4
-                        }
-                        sortEnabledFirst && !sortActionFirst -> if (it.enabled) 1 else 2
-                        !sortEnabledFirst && sortActionFirst -> if (executable) 1 else 2
-                        else -> 1
-                    }
-                },
-                { if (sortEnabledFirst) !it.enabled else 0 },
-                { if (sortActionFirst) !(it.hasWebUi || it.hasActionScript) else 0 },
-            ).thenBy(Collator.getInstance(Locale.getDefault()), ModuleInfo::id)
-        modules.filter {
-            it.id.contains(search, true) || it.name.contains(search, true) || HanziToPinyin.getInstance()
-                .toPinyinString(it.name)?.contains(search, true) == true
-        }.sortedWith(comparator).also {
-            isRefreshing = false
-        }
+    private val _uiState = MutableStateFlow(ModuleUiState())
+    val uiState: StateFlow<ModuleUiState> = _uiState.asStateFlow()
+
+    private val updateInfoMutex = Mutex()
+    private var updateInfoCache: MutableMap<String, ModuleUpdateCache> = mutableMapOf()
+    private val updateInfoInFlight = mutableSetOf<String>()
+    private val searchQuery = MutableStateFlow("")
+
+    private var fetchJob: Job? = null
+
+    var isNeedRefresh = false
+        private set
+
+    init {
+        viewModelScope.launchSearchQueryCollector(searchQuery, ::applySearchText)
     }
-
-    var isNeedRefresh by mutableStateOf(false)
-        private set
 
     fun markNeedRefresh() {
         isNeedRefresh = true
-        // 标记需要刷新时，同时刷新大小缓存
-        refreshModuleSizeCache()
     }
 
-    fun fetchModuleList() {
+    fun initializePreferences() {
+        val prefs = ksuApp.getSharedPreferences("settings", 0)
+        _uiState.update {
+            it.copy(
+                checkModuleUpdate = prefs.getBoolean("module_check_update", true),
+                sortEnabledFirst = prefs.getBoolean("module_sort_enabled_first", false),
+                sortActionFirst = prefs.getBoolean("module_sort_action_first", false),
+            )
+        }
+        updateModuleList()
+    }
+
+    fun toggleSortActionFirst() {
+        val newValue = !_uiState.value.sortActionFirst
+        ksuApp.getSharedPreferences("settings", 0).edit {
+            putBoolean("module_sort_action_first", newValue)
+        }
+        _uiState.update { it.copy(sortActionFirst = newValue) }
+        updateModuleList()
+    }
+
+    fun toggleSortEnabledFirst() {
+        val newValue = !_uiState.value.sortEnabledFirst
+        ksuApp.getSharedPreferences("settings", 0).edit {
+            putBoolean("module_sort_enabled_first", newValue)
+        }
+        _uiState.update { it.copy(sortEnabledFirst = newValue) }
+        updateModuleList()
+    }
+
+    fun refreshEnvironmentState() {
+        viewModelScope.launch {
+            val magiskInstalled = withContext(Dispatchers.IO) { hasMagisk() }
+            val isSafeMode = Natives.isSafeMode
+            _uiState.update {
+                it.copy(
+                    magiskInstalled = magiskInstalled,
+                    isSafeMode = isSafeMode,
+                )
+            }
+        }
+    }
+
+    fun updateSearchStatus(status: SearchStatus) {
+        val previous = _uiState.value.searchStatus
+        _uiState.update { it.copy(searchStatus = status) }
+        if (previous.searchText != status.searchText) {
+            searchQuery.value = status.searchText
+        }
+    }
+
+    fun updateSearchText(text: String) {
+        updateSearchStatus(_uiState.value.searchStatus.copy(searchText = text))
+    }
+
+    private fun filterModules(modules: List<Module>, text: String): List<Module> {
+        if (text.isEmpty()) return emptyList()
+
+        return modules.filter {
+            it.id.contains(text, true) || it.name.contains(text, true) ||
+                    it.description.contains(text, true) || it.author.contains(text, true) ||
+                    com.sukisu.ultra.ui.util.HanziToPinyin.getInstance().toPinyinString(it.name)
+                        .contains(text, true)
+        }
+    }
+
+    private suspend fun applySearchText(text: String) {
+        _uiState.update {
+            it.copy(
+                searchStatus = it.searchStatus.copy(
+                    resultStatus = searchLoadingStatusFor(text)
+                )
+            )
+        }
+
+        if (text.isEmpty()) {
+            updateModuleList()
+            return
+        }
+
+        val result = withContext(Dispatchers.IO) {
+            val state = _uiState.value
+            filterModules(state.modules, text).sortedWith(moduleComparator(state))
+        }
+
+        _uiState.update {
+            it.copy(
+                searchResults = result,
+                searchStatus = it.searchStatus.copy(
+                    resultStatus = searchResultStatusFor(text, result.isEmpty())
+                )
+            )
+        }
+    }
+
+    private fun updateModuleList() {
         viewModelScope.launch(Dispatchers.IO) {
-            isRefreshing = true
+            val state = _uiState.value
+            val searchText = state.searchStatus.searchText
+            val shorted = state.modules.sortedWith(moduleComparator(state))
+            val searchResults = filterModules(shorted, searchText)
 
-            val oldModuleList = modules
+            _uiState.update {
+                it.copy(
+                    moduleList = shorted,
+                    searchResults = searchResults,
+                    searchStatus = it.searchStatus.copy(
+                        resultStatus = searchResultStatusFor(searchText, searchResults.isEmpty())
+                    )
+                )
+            }
+        }
+    }
 
-            val start = SystemClock.elapsedRealtime()
-
-            kotlin.runCatching {
-                val result = listModules()
-
-                Log.i(TAG, "result: $result")
-
-                val array = JSONArray(result)
-                val moduleInfos = (0 until array.length())
-                    .asSequence()
-                    .map { array.getJSONObject(it) }
-                    .map { obj ->
-                        ModuleInfo(
-                            obj.getString("id"),
-                            obj.optString("name"),
-                            obj.optString("author", "Unknown"),
-                            obj.optString("version", "Unknown"),
-                            obj.getIntCompat("versionCode", 0),
-                            obj.optString("description"),
-                            obj.getBooleanCompat("enabled"),
-                            obj.getBooleanCompat("update"),
-                            obj.getBooleanCompat("remove"),
-                            obj.optString("updateJson"),
-                            obj.getBooleanCompat("web"),
-                            obj.getBooleanCompat("action"),
-                            obj.getBooleanCompat("metamodule"),
-                            obj.optString("dir_id", obj.getString("id"))
-                        )
-                    }.toList()
-
-                // 批量检查所有模块的验证状态
-                val moduleIds = moduleInfos.map { it.dirId }
-                val verificationStatus = ModuleVerificationManager.batchCheckVerificationStatus(moduleIds)
-
-                // 更新模块验证状态
-                modules = moduleInfos.map { moduleInfo ->
-                    val isVerified = verificationStatus[moduleInfo.dirId] ?: false
-                    val verificationTimestamp = if (isVerified) {
-                        ModuleVerificationManager.getVerificationTimestamp(moduleInfo.dirId)
-                    } else {
-                        0L
+    private fun moduleComparator(state: ModuleUiState): Comparator<Module> {
+        return compareBy<Module>(
+            {
+                val executable = it.hasWebUi || it.hasActionScript
+                when {
+                    it.metamodule && it.enabled -> 0
+                    state.sortEnabledFirst && state.sortActionFirst -> when {
+                        it.enabled && executable -> 1
+                        it.enabled -> 2
+                        executable -> 3
+                        else -> 4
                     }
 
-                    moduleInfo.copy(
-                        isVerified = isVerified,
-                        verificationTimestamp = verificationTimestamp
-                    )
+                    state.sortEnabledFirst && !state.sortActionFirst -> if (it.enabled) 1 else 2
+                    !state.sortEnabledFirst && state.sortActionFirst -> if (executable) 1 else 2
+                    else -> 1
                 }
+            },
+            { if (state.sortEnabledFirst) !it.enabled else 0 },
+            { if (state.sortActionFirst) !(it.hasWebUi || it.hasActionScript) else 0 },
+        ).thenBy(Collator.getInstance(Locale.getDefault()), Module::id)
+    }
 
-                launch {
-                    modules.forEach { module ->
-                        withContext(Dispatchers.IO) {
-                            try {
-                                runCatching {
-                                    module.config = module.id.asModuleConfig
-                                }.onFailure { e ->
-                                    Log.e(TAG, "Failed to load config from id for module ${module.id}", e)
-                                }
-                                if (module.config == null) {
-                                    runCatching {
-                                        module.config = module.name.asModuleConfig
-                                    }.onFailure { e ->
-                                        Log.e(TAG, "Failed to load config from name for module ${module.id}", e)
-                                    }
-                                }
-                                if (module.config == null) {
-                                    runCatching {
-                                        module.config = module.description.asModuleConfig
-                                    }.onFailure { e ->
-                                        Log.e(TAG, "Failed to load config from description for module ${module.id}", e)
-                                    }
-                                }
-                                if (module.config == null) {
-                                    module.config = ModuleConfig()
-                                }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Failed to load any config for module ${module.id}", e)
-                                module.config = ModuleConfig()
-                            }
+    suspend fun loadModuleList() {
+        val parsedModules = withContext(Dispatchers.IO) {
+            repo.getModules().getOrElse {
+                Log.e(TAG, "fetchModuleList: ", it)
+                emptyList()
+            }
+        }
+
+        withContext(Dispatchers.Main) {
+            _uiState.update {
+                it.copy(
+                    modules = parsedModules,
+                )
+            }
+            // Trigger recalculation of moduleList
+            updateModuleList()
+            isNeedRefresh = false
+        }
+    }
+
+    fun fetchModuleList(checkUpdate: Boolean = false) {
+        fetchJob?.cancel()
+        _uiState.update { it.copy(isRefreshing = true) }
+        fetchJob = viewModelScope.launch {
+            try {
+                val start = SystemClock.elapsedRealtime()
+
+                loadModuleList()
+
+                if (checkUpdate) syncModuleUpdateInfo(_uiState.value.modules)
+
+                Log.i(TAG, "load cost: ${SystemClock.elapsedRealtime() - start}, modules: ${_uiState.value.modules}")
+            } finally {
+                _uiState.update { it.copy(isRefreshing = false, hasLoaded = true) }
+            }
+        }
+    }
+
+    private fun Module.toSignature(): ModuleUpdateSignature {
+        return ModuleUpdateSignature(
+            updateJson = updateJson,
+            versionCode = versionCode,
+            enabled = enabled,
+            update = update,
+            remove = remove
+        )
+    }
+
+    suspend fun syncModuleUpdateInfo(modules: List<Module>) {
+        if (!_uiState.value.checkModuleUpdate) return
+
+        val modulesToFetch = mutableListOf<Triple<String, Module, ModuleUpdateSignature>>()
+        val removedIds = mutableSetOf<String>()
+
+        updateInfoMutex.withLock {
+            val ids = modules.map { it.id }.toSet()
+            updateInfoCache.keys.filter { it !in ids }.forEach { removedId ->
+                removedIds += removedId
+                updateInfoCache.remove(removedId)
+                updateInfoInFlight.remove(removedId)
+            }
+
+            modules.forEach { module ->
+                val signature = module.toSignature()
+                val cached = updateInfoCache[module.id]
+                if ((cached == null || cached.signature != signature) && updateInfoInFlight.add(module.id)) {
+                    modulesToFetch += Triple(module.id, module, signature)
+                }
+            }
+        }
+
+        val fetchedEntries = coroutineScope {
+            modulesToFetch.map { (id, module, signature) ->
+                async {
+                    val info = withTimeoutOrNull(5_000L) {
+                        withContext(Dispatchers.IO) { checkUpdate(module) }
+                    } ?: ModuleUpdateInfo.Empty
+                    id to ModuleUpdateCache(signature, info)
+                }
+            }.awaitAll()
+        }
+
+        val changedEntries = mutableListOf<Pair<String, ModuleUpdateInfo>>()
+        updateInfoMutex.withLock {
+            fetchedEntries.forEach { (id, entry) ->
+                val existing = updateInfoCache[id]
+                if (existing == null || existing.signature != entry.signature || existing.info != entry.info) {
+                    updateInfoCache[id] = entry
+                    changedEntries += id to entry.info
+                }
+                updateInfoInFlight.remove(id)
+            }
+        }
+
+        if (removedIds.isEmpty() && changedEntries.isEmpty()) {
+            return
+        }
+
+        withContext(Dispatchers.Main) {
+            _uiState.update { state ->
+                val newMap = state.updateInfo.toMutableMap()
+                removedIds.forEach { newMap.remove(it) }
+                changedEntries.forEach { (id, info) ->
+                    newMap[id] = info
+                }
+                state.copy(updateInfo = newMap)
+            }
+        }
+    }
+
+    fun requestUpdateConfirmation(module: Module, updateInfo: ModuleUpdateInfo) {
+        viewModelScope.launch {
+            val dialogState = buildUpdateConfirmDialogState(module, updateInfo)
+            _uiState.update { it.copy(confirmDialogState = dialogState) }
+        }
+    }
+
+    fun requestUninstallConfirmation(module: Module) {
+        val res = ksuApp.resources
+        _uiState.update {
+            it.copy(
+                confirmDialogState = ModuleConfirmDialogState(
+                    request = ModuleConfirmRequest.Uninstall(module),
+                    title = res.getString(R.string.module),
+                    content = (if (module.metamodule) res.getString(R.string.metamodule_uninstall_confirm) else res.getString(R.string.module_uninstall_confirm)).format(
+                        module.name
+                    ),
+                    confirm = res.getString(R.string.uninstall),
+                    dismiss = res.getString(android.R.string.cancel),
+                )
+            )
+        }
+    }
+
+    fun dismissConfirmRequest() {
+        _uiState.update { it.copy(confirmDialogState = null) }
+    }
+
+    fun consumeEffect() {
+        _uiState.update { it.copy(effect = null) }
+    }
+
+    fun emitEffect(effect: ModuleEffect) {
+        _uiState.update { it.copy(effect = effect) }
+    }
+
+    fun toggleModule(module: Module) {
+        viewModelScope.launch {
+            val res = ksuApp.resources
+            val success = withContext(Dispatchers.IO) {
+                toggleModuleUtil(module.id, !module.enabled)
+            }
+            if (success) {
+                fetchModuleList(checkUpdate = true)
+                _uiState.update { it.copy(effect = ModuleEffect.SnackBar(res.getString(R.string.reboot_to_apply))) }
+            } else {
+                val message = if (module.enabled) R.string.module_failed_to_disable else R.string.module_failed_to_enable
+                _uiState.update { it.copy(effect = ModuleEffect.SnackBar(res.getString(message).format(module.name))) }
+            }
+        }
+    }
+
+    fun uninstallModule(module: Module) {
+        viewModelScope.launch {
+            val res = ksuApp.resources
+            val success = withContext(Dispatchers.IO) {
+                uninstallModuleUtil(module.id)
+            }
+            if (success) {
+                fetchModuleList(checkUpdate = true)
+            }
+            _uiState.update {
+                it.copy(
+                    confirmDialogState = null,
+                    effect = ModuleEffect.SnackBar(
+                        res.getString(
+                            if (success) R.string.module_uninstall_success else R.string.module_uninstall_failed
+                        ).format(module.name)
+                    )
+                )
+            }
+        }
+    }
+
+    fun undoUninstallModule(module: Module) {
+        viewModelScope.launch {
+            val res = ksuApp.resources
+            val success = withContext(Dispatchers.IO) {
+                undoUninstallModuleUtil(module.id)
+            }
+            if (success) {
+                fetchModuleList(checkUpdate = true)
+            }
+            _uiState.update {
+                it.copy(
+                    effect = ModuleEffect.SnackBar(
+                        res.getString(
+                            if (success) R.string.module_undo_uninstall_success else R.string.module_undo_uninstall_failed
+                        ).format(module.name)
+                    )
+                )
+            }
+        }
+    }
+
+    private suspend fun buildUpdateConfirmDialogState(
+        module: Module,
+        updateInfo: ModuleUpdateInfo,
+    ): ModuleConfirmDialogState {
+        val res = ksuApp.resources
+        val changelogUrl = updateInfo.changelog
+
+        var changelog = ""
+        var html = false
+
+        if (changelogUrl.isNotBlank()) {
+            withContext(Dispatchers.IO) {
+                if (changelogUrl.startsWith("#") && changelogUrl.contains('@')) {
+                    val parts = changelogUrl.substring(1).split('@', limit = 2)
+                    if (parts.size == 2) {
+                        fetchReleaseDescriptionHtml(parts[0], parts[1])?.let {
+                            changelog = it
+                            html = true
                         }
                     }
                 }
 
-                // 首次加载模块列表时，初始化缓存
-                if (::moduleSizeCache.isInitialized) {
-                    val currentModules = modules.map { it.dirId }
-                    moduleSizeCache.initializeCacheIfNeeded(currentModules)
-                }
-
-                isNeedRefresh = false
-            }.onFailure { e ->
-                Log.e(TAG, "fetchModuleList: ", e)
-                isRefreshing = false
-            }
-
-            // when both old and new is kotlin.collections.EmptyList
-            // moduleList update will don't trigger
-            if (oldModuleList === modules) {
-                isRefreshing = false
-            }
-
-            Log.i(TAG, "load cost: ${SystemClock.elapsedRealtime() - start}, modules: $modules")
-        }
-    }
-
-    private fun sanitizeVersionString(version: String): String {
-        return version.replace(Regex("[^a-zA-Z0-9.\\-_]"), "_")
-    }
-
-    fun checkUpdate(m: ModuleInfo): Triple<String, String, String> {
-        val empty = Triple("", "", "")
-        if (m.updateJson.isEmpty() || m.remove || m.update || !m.enabled) {
-            return empty
-        }
-        // download updateJson
-        val result = kotlin.runCatching {
-            val url = m.updateJson
-            Log.i(TAG, "checkUpdate url: $url")
-
-            val client = okhttp3.OkHttpClient.Builder()
-                .connectTimeout(15, TimeUnit.SECONDS)
-                .readTimeout(30, TimeUnit.SECONDS)
-                .writeTimeout(15, TimeUnit.SECONDS)
-                .build()
-
-            val request = okhttp3.Request.Builder()
-                .url(url)
-                .header("User-Agent", CUSTOM_USER_AGENT)
-                .build()
-
-            val response = client.newCall(request).execute()
-
-            Log.d(TAG, "checkUpdate code: ${response.code}")
-            if (response.isSuccessful) {
-                response.body?.string() ?: ""
-            } else {
-                Log.d(TAG, "checkUpdate failed: ${response.message}")
-                ""
-            }
-        }.getOrElse { e ->
-            Log.e(TAG, "checkUpdate exception", e)
-            ""
-        }
-
-        Log.i(TAG, "checkUpdate result: $result")
-
-        if (result.isEmpty()) {
-            return empty
-        }
-
-        val updateJson = kotlin.runCatching {
-            JSONObject(result)
-        }.getOrNull() ?: return empty
-
-        var version = updateJson.optString("version", "")
-        version = sanitizeVersionString(version)
-        val versionCode = updateJson.optInt("versionCode", 0)
-        val zipUrl = updateJson.optString("zipUrl", "")
-        val changelog = updateJson.optString("changelog", "")
-        if (versionCode <= m.versionCode || zipUrl.isEmpty()) {
-            return empty
-        }
-
-        return Triple(zipUrl, version, changelog)
-    }
-}
-
-fun ModuleViewModel.ModuleInfo.copy(
-    id: String = this.id,
-    name: String = this.name,
-    author: String = this.author,
-    version: String = this.version,
-    versionCode: Int = this.versionCode,
-    description: String = this.description,
-    enabled: Boolean = this.enabled,
-    update: Boolean = this.update,
-    remove: Boolean = this.remove,
-    updateJson: String = this.updateJson,
-    hasWebUi: Boolean = this.hasWebUi,
-    hasActionScript: Boolean = this.hasActionScript,
-    metamodule: Boolean = this.metamodule,
-    dirId: String = this.dirId,
-    config: ModuleConfig? = this.config,
-    isVerified: Boolean = this.isVerified,
-    verificationTimestamp: Long = this.verificationTimestamp
-): ModuleViewModel.ModuleInfo {
-    return ModuleViewModel.ModuleInfo(
-        id, name, author, version, versionCode, description,
-        enabled, update, remove, updateJson, hasWebUi, hasActionScript, metamodule,
-        dirId, config, isVerified, verificationTimestamp
-    )
-}
-
-/**
- * 模块大小缓存管理器
- */
-class ModuleSizeCache(context: Context) {
-    companion object {
-        private const val TAG = "ModuleSizeCache"
-        private const val CACHE_PREFS_NAME = "module_size_cache"
-        private const val CACHE_VERSION_KEY = "cache_version"
-        private const val CACHE_INITIALIZED_KEY = "cache_initialized"
-        private const val CURRENT_CACHE_VERSION = 1
-    }
-
-    private val cachePrefs = context.getSharedPreferences(CACHE_PREFS_NAME, Context.MODE_PRIVATE)
-    private val sizeCache = mutableMapOf<String, Long>()
-
-    init {
-        loadCacheFromPrefs()
-    }
-
-    /**
-     * 从SharedPreferences加载缓存
-     */
-    private fun loadCacheFromPrefs() {
-        try {
-            val cacheVersion = cachePrefs.getInt(CACHE_VERSION_KEY, 0)
-            if (cacheVersion != CURRENT_CACHE_VERSION) {
-                Log.d(TAG, "缓存版本不匹配，清空缓存")
-                clearCache()
-                return
-            }
-
-            val allEntries = cachePrefs.all
-            for ((key, value) in allEntries) {
-                if (key != CACHE_VERSION_KEY && key != CACHE_INITIALIZED_KEY && value is Long) {
-                    sizeCache[key] = value
+                if (changelog.isBlank()) {
+                    changelog = runCatching {
+                        ksuApp.okhttpClient.newCall(
+                            Request.Builder().url(changelogUrl).build()
+                        ).execute().body.string()
+                    }.getOrDefault("")
                 }
             }
-            Log.d(TAG, "从缓存加载了 ${sizeCache.size} 个模块大小数据")
-        } catch (e: Exception) {
-            Log.e(TAG, "加载缓存失败", e)
-            clearCache()
         }
-    }
 
-    /**
-     * 保存缓存到SharedPreferences
-     */
-    private fun saveCacheToPrefs() {
-        try {
-            cachePrefs.edit {
-                putInt(CACHE_VERSION_KEY, CURRENT_CACHE_VERSION)
-                putBoolean(CACHE_INITIALIZED_KEY, true)
-
-                for ((dirId, size) in sizeCache) {
-                    putLong(dirId, size)
+        if (changelog.isBlank()) {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    val latestTag = fetchModuleDetail(module.id)?.latestTag.orEmpty()
+                    if (latestTag.isNotBlank()) {
+                        fetchReleaseDescriptionHtml(module.id, latestTag)?.let {
+                            changelog = it
+                            html = true
+                        }
+                    }
                 }
-
-            }
-            Log.d(TAG, "保存了 ${sizeCache.size} 个模块大小到缓存")
-        } catch (e: Exception) {
-            Log.e(TAG, "保存缓存失败", e)
-        }
-    }
-
-    /**
-     * 获取模块大小（从缓存）
-     */
-    fun getModuleSize(dirId: String): Long {
-        return sizeCache[dirId] ?: 0L
-    }
-
-    /**
-     * 检查缓存是否已初始化，如果没有则初始化
-     */
-    fun initializeCacheIfNeeded(currentModules: List<String>) {
-        val isInitialized = cachePrefs.getBoolean(CACHE_INITIALIZED_KEY, false)
-        if (!isInitialized || sizeCache.isEmpty()) {
-            Log.d(TAG, "首次初始化缓存，计算所有模块大小")
-            refreshCache(currentModules)
-        } else {
-            // 检查是否有新模块需要计算大小
-            val newModules = currentModules.filter { !sizeCache.containsKey(it) }
-            if (newModules.isNotEmpty()) {
-                Log.d(TAG, "发现 ${newModules.size} 个新模块，计算大小: $newModules")
-                for (dirId in newModules) {
-                    val size = calculateModuleFolderSize(dirId)
-                    sizeCache[dirId] = size
-                    Log.d(TAG, "新模块 $dirId 大小: ${formatFileSize(size)}")
-                }
-                saveCacheToPrefs()
             }
         }
+
+        return ModuleConfirmDialogState(
+            request = ModuleConfirmRequest.Update(
+                module = module,
+                downloadUrl = updateInfo.downloadUrl,
+                fileName = "${module.name}-${updateInfo.version}.zip",
+            ),
+            title = if (changelog.isNotBlank()) res.getString(R.string.module_changelog) else res.getString(R.string.module_update),
+            content = changelog.ifBlank { res.getString(R.string.module_start_downloading).format(module.name) },
+            markdown = changelog.isNotBlank() && !html,
+            html = html,
+            confirm = res.getString(R.string.module_update),
+        )
     }
 
-    /**
-     * 刷新所有模块的大小缓存
-     */
-    fun refreshCache(currentModules: List<String>) {
-        try {
-            // 清理不存在的模块缓存
-            val toRemove = sizeCache.keys.filter { it !in currentModules }
-            toRemove.forEach { sizeCache.remove(it) }
-
-            if (toRemove.isNotEmpty()) {
-                Log.d(TAG, "清理了 ${toRemove.size} 个不存在的模块缓存: $toRemove")
-            }
-
-            // 计算所有当前模块的大小
-            for (dirId in currentModules) {
-                val size = calculateModuleFolderSize(dirId)
-                sizeCache[dirId] = size
-                Log.d(TAG, "更新模块 $dirId 大小: ${formatFileSize(size)}")
-            }
-
-            // 保存到持久化存储
-            saveCacheToPrefs()
-        } catch (e: Exception) {
-            Log.e(TAG, "刷新缓存失败", e)
-        }
+    private suspend fun checkUpdate(m: Module): ModuleUpdateInfo {
+        return repo.checkUpdate(m).getOrDefault(ModuleUpdateInfo.Empty)
     }
-
-    /**
-     * 清空所有缓存
-     */
-    private fun clearCache() {
-        sizeCache.clear()
-        cachePrefs.edit { clear() }
-        Log.d(TAG, "清空所有缓存")
-    }
-
-    /**
-     * 实际计算模块文件夹大小
-     */
-    private fun calculateModuleFolderSize(dirId: String): Long {
-        return try {
-            val shell = getRootShell()
-            val command = "/data/adb/ksu/bin/busybox du -sb /data/adb/modules/$dirId"
-            val result = shell.newJob().add(command).to(ArrayList(), null).exec()
-
-            if (result.isSuccess && result.out.isNotEmpty()) {
-                val sizeStr = result.out.firstOrNull()?.split("\t")?.firstOrNull()
-                sizeStr?.toLongOrNull() ?: 0L
-            } else {
-                0L
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "计算模块大小失败 $dirId: ${e.message}")
-            0L
-        }
-    }
-}
-
-private fun JSONObject.getBooleanCompat(key: String, default: Boolean = false): Boolean {
-    if (!has(key)) return default
-    return when (val value = opt(key)) {
-        is Boolean -> value
-        is String -> value.equals("true", ignoreCase = true) || value == "1"
-        is Number -> value.toInt() != 0
-        else -> default
-    }
-}
-
-private fun JSONObject.getIntCompat(key: String, default: Int = 0): Int {
-    if (!has(key)) return default
-    return when (val value = opt(key)) {
-        is Int -> value
-        is Number -> value.toInt()
-        is String -> value.toIntOrNull() ?: default
-        else -> default
-    }
-}
-
-/**
- * 格式化文件大小的工具函数
- */
-fun formatFileSize(bytes: Long): String {
-    if (bytes <= 0) return "0 KB"
-
-    val units = arrayOf("B", "KB", "MB", "GB", "TB")
-    val digitGroups = (log10(bytes.toDouble()) / log10(1024.0)).toInt()
-
-    return DecimalFormat("#,##0.#").format(
-        bytes / 1024.0.pow(digitGroups.toDouble())
-    ) + " " + units[digitGroups]
 }

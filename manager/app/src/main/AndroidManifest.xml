@@ -3,41 +3,33 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
-        tools:ignore="ScopedStorage" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        tools:ignore="ScopedStorage" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
+    <uses-sdk tools:overrideLibrary="top.yukonga.miuix.kmp.blur" />
 
     <application
         android:name=".KernelSUApplication"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
-        android:enableOnBackInvokedCallback="true"
+        android:directBootAware="true"
         android:fullBackupContent="@xml/backup_rules"
         android:hasFragileUserData="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:networkSecurityConfig="@xml/network_security_config"
-        android:requestLegacyExternalStorage="true"
         android:supportsRtl="true"
         android:theme="@style/Theme.KernelSU"
-        tools:targetApi="34">
-        <!-- 专门为小米手机桌面卸载添加了提示，提升用户体验 -->
-        <meta-data
-            android:name="app_description_title"
-            android:resource="@string/miui_uninstall_title" />
-        <meta-data
-            android:name="app_description_content"
-            android:resource="@string/miui_uninstall_content" />
+        android:zygotePreloadName="com.sukisu.ultra.magica.AppZygotePreload">
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
             android:enabled="true"
-            android:launchMode="standard"
-            android:documentLaunchMode="intoExisting"
-            android:autoRemoveFromRecents="true"
-            android:theme="@style/Theme.KernelSU">
+            android:theme="@style/Theme.KernelSU"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -100,15 +92,10 @@
         <activity
             android:name=".ui.webui.WebUIActivity"
             android:autoRemoveFromRecents="true"
+            android:configChanges="density|orientation|screenSize|screenLayout|smallestScreenSize|uiMode|locale|layoutDirection|fontScale|keyboard|keyboardHidden"
             android:documentLaunchMode="intoExisting"
             android:exported="false"
-            android:theme="@style/Theme.KernelSU.WebUI" />
-
-        <activity
-            android:name=".ui.webui.WebUIXActivity"
-            android:autoRemoveFromRecents="true"
-            android:documentLaunchMode="intoExisting"
-            android:exported="false"
+            android:taskAffinity="${applicationId}.webui"
             android:theme="@style/Theme.KernelSU.WebUI" />
 
         <provider
@@ -120,6 +107,32 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/filepaths" />
         </provider>
+
+        <service
+            android:name=".magica.MagicaService"
+            android:directBootAware="true"
+            android:exported="false"
+            android:isolatedProcess="true"
+            android:useAppZygote="true" />
+
+        <service
+            android:name=".ui.util.DownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <receiver
+            android:name=".magica.BootCompletedReceiver"
+            android:directBootAware="true"
+            android:enabled="false"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="com.sukisu.ultra.magica.LAUNCH" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

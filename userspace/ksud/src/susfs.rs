@@ -27,7 +27,7 @@ pub fn get_susfs_version() -> String {
         err: ERR_CMD_NOT_SUPPORTED,
     };
 
-    let ret = unsafe {
+    unsafe {
         libc::syscall(
             SYS_reboot,
             KSU_INSTALL_MAGIC1,
@@ -37,12 +37,15 @@ pub fn get_susfs_version() -> String {
         )
     };
 
-    if ret < 0 {
-        return "unsupport".to_string();
-    }
-
     let ver = cmd.susfs_version.iter().position(|&b| b == 0).unwrap_or(16);
-    String::from_utf8(cmd.susfs_version[..ver].to_vec()).unwrap_or_else(|_| "<invalid>".to_string())
+    let ver = String::from_utf8(cmd.susfs_version[..ver].to_vec())
+        .unwrap_or_else(|_| "<invalid>".to_string());
+
+    if ver.starts_with('v') {
+        ver
+    } else {
+        "unsupport".to_string()
+    }
 }
 
 pub fn get_susfs_status() -> bool {
@@ -55,7 +58,7 @@ pub fn get_susfs_features() -> String {
         err: ERR_CMD_NOT_SUPPORTED,
     };
 
-    let ret = unsafe {
+    unsafe {
         libc::syscall(
             SYS_reboot,
             KSU_INSTALL_MAGIC1,
@@ -64,10 +67,6 @@ pub fn get_susfs_features() -> String {
             &mut cmd,
         )
     };
-
-    if ret < 0 {
-        return String::new();
-    }
 
     let features = cmd
         .enabled_features

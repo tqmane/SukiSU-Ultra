@@ -2,7 +2,7 @@
 <img align='right' src='SukiSU-mini.svg' width='250px' alt="sukisu logo">
 
 
-[English](../README.md) | [简体中文](../zh/README.md) | [日本語](../ja/README.md) | **Türkçe** | [Русский](../ru/README.md)
+[English](../README.md) | [简体中文](../zh/README.md) | [日本語](../ja/README.md) | **Türkçe**
 
 [KernelSU](https://github.com/tiann/KernelSU) tabanlı Android cihaz root çözümü
 
@@ -25,7 +25,7 @@ curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kern
 GKI olmayan cihazları destekleyen dalı kullanın
 
 ```
-curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s nongki
+curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s builtin
 ```
 
 ## susfs Nasıl Entegre Edilir

@@ -10,19 +10,28 @@ use anyhow::{Context, Result, anyhow, bail, ensure};
 use const_format::concatcp;
 use is_executable::is_executable;
 use java_properties::PropertiesIter;
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
+#[cfg(all(target_os = "android", target_arch = "aarch64"))]
+use mlua::{Function, Lua, Result as LuaResult, Table};
 use regex_lite::Regex;
 
-use std::fs::{copy, rename};
+#[cfg(all(target_os = "android", target_arch = "aarch64"))]
+use std::fs;
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     env::var as env_var,
     fs::{File, Permissions, canonicalize, remove_dir_all, set_permissions},
     io::Cursor,
     path::{Path, PathBuf},
     process::Command,
     str::FromStr,
+    time::Duration,
 };
+use std::{
+    fs::{copy, rename},
+    io::Write,
+};
+use wait_timeout::ChildExt;
 use zip_extensions::inflate::zip_extract::zip_extract_file_to_memory;
 
 use crate::defs::{MODULE_DIR, MODULE_UPDATE_DIR, UPDATE_FILE_NAME};
@@ -57,8 +66,8 @@ pub fn validate_module_id(module_id: &str) -> Result<()> {
 }
 
 /// Get common environment variables for script execution
-pub fn get_common_script_envs() -> Vec<(&'static str, String)> {
-    vec![
+pub fn get_common_script_envs(module_id: Option<&str>) -> Vec<(&'static str, String)> {
+    let mut envs = vec![
         ("ASH_STANDALONE", "1".to_string()),
         ("KSU", "true".to_string()),
         ("KSU_SUKISU", "true".to_string()),
@@ -73,10 +82,24 @@ pub fn get_common_script_envs() -> Vec<(&'static str, String)> {
                 defs::BINARY_DIR.trim_end_matches('/')
             ),
         ),
-    ]
+    ];
+
+    if let Some(id) = module_id {
+        if validate_module_id(id).is_ok() {
+            envs.push(("KSU_MODULE", id.to_string()));
+        } else {
+            error!("Invalid module_id provided: {id}");
+        }
+    }
+
+    if ksucalls::is_late_load() {
+        envs.push(("KSU_LATE_LOAD", "1".to_string()));
+    }
+
+    envs
 }
 
-fn exec_install_script(module_file: &str, is_metamodule: bool) -> Result<()> {
+fn exec_install_script(module_file: &str, is_metamodule: bool, module_id: &str) -> Result<()> {
     let realpath = std::fs::canonicalize(module_file)
         .with_context(|| format!("realpath: {module_file} failed"))?;
 
@@ -86,7 +109,7 @@ fn exec_install_script(module_file: &str, is_metamodule: bool) -> Result<()> {
 
     let result = Command::new(assets::BUSYBOX_PATH)
         .args(["sh", "-c", &install_script])
-        .envs(get_common_script_envs())
+        .envs(get_common_script_envs(Some(module_id)))
         .env("OUTFD", "1")
         .env("ZIPFILE", realpath)
         .status()?;
@@ -163,7 +186,7 @@ pub fn load_sepolicy_rule() -> Result<()> {
     Ok(())
 }
 
-pub fn exec_script<T: AsRef<Path>>(path: T, wait: bool) -> Result<()> {
+pub fn exec_script<T: AsRef<Path>>(path: T, wait: bool, timeout: Duration) -> Result<()> {
     info!("exec {}", path.as_ref().display());
 
     let is_module_script = path.as_ref().starts_with(defs::MODULE_DIR);
@@ -206,9 +229,9 @@ pub fn exec_script<T: AsRef<Path>>(path: T, wait: bool) -> Result<()> {
     let mut command = &mut Command::new(assets::BUSYBOX_PATH);
     #[cfg(unix)]
     {
-        command = command.process_group(0);
         command = unsafe {
             command.pre_exec(|| {
+                detach_process_group(true);
                 // ignore the error?
                 switch_cgroups();
                 Ok(())
@@ -219,17 +242,14 @@ pub fn exec_script<T: AsRef<Path>>(path: T, wait: bool) -> Result<()> {
         .current_dir(path.as_ref().parent().unwrap())
         .arg("sh")
         .arg(path.as_ref())
-        .envs(get_common_script_envs());
+        .envs(get_common_script_envs(validated_module_id));
 
-    // Set KSU_MODULE environment variable if module_id was validated successfully
-    if let Some(id) = validated_module_id {
-        command = command.env("KSU_MODULE", id);
-    }
-
-    let result = if wait {
-        command.status().map(|_| ())
-    } else {
-        command.spawn().map(|_| ())
+    let result = {
+        if wait {
+            command.spawn()?.wait_timeout(timeout).map(|_| ())
+        } else {
+            command.spawn().map(|_| ())
+        }
     };
     result.map_err(|e| anyhow!("Failed to exec {}: {e}", path.as_ref().display()))
 }
@@ -239,9 +259,7 @@ pub fn exec_stage_script(stage: &str, block: bool) -> Result<()> {
 
     foreach_active_module(|module| {
         if metamodule_dir.as_ref().is_some_and(|meta_dir| {
-            canonicalize(module)
-                .map(|resolved| resolved == *meta_dir)
-                .unwrap_or(false)
+            canonicalize(module).is_ok_and(|resolved| resolved == *meta_dir)
         }) {
             return Ok(());
         }
@@ -251,7 +269,7 @@ pub fn exec_stage_script(stage: &str, block: bool) -> Result<()> {
             return Ok(());
         }
 
-        exec_script(&script_path, block)
+        exec_script(&script_path, block, defs::EXEC_STAGE_TIMEOUT)
     })?;
 
     Ok(())
@@ -273,7 +291,151 @@ pub fn exec_common_scripts(dir: &str, wait: bool) -> Result<()> {
             continue;
         }
 
-        exec_script(path, wait)?;
+        exec_script(path, wait, defs::EXEC_STAGE_TIMEOUT)?;
+    }
+
+    Ok(())
+}
+
+#[cfg(all(target_os = "android", target_arch = "aarch64"))]
+pub fn save_text<P: AsRef<Path>>(filename: P, content: &str) -> std::io::Result<()> {
+    let _ = ensure_dir_exists("/data/adb/config");
+    let path = format!("/data/adb/config/{}", filename.as_ref().display());
+    fs::write(&path, content)
+}
+
+#[cfg(all(target_os = "android", target_arch = "aarch64"))]
+pub fn load_text<P: AsRef<Path>>(filename: P) -> std::io::Result<String> {
+    let _ = ensure_dir_exists("/data/adb/config");
+    let path = format!("/data/adb/config/{}", filename.as_ref().display());
+    fs::read_to_string(path)
+}
+
+#[cfg(all(target_os = "android", target_arch = "aarch64"))]
+pub fn load_all_lua_modules(lua: &Lua) -> LuaResult<()> {
+    let modules_dir = Path::new("/data/adb/modules");
+
+    let modules: Table = if let Ok(t) = lua.globals().get("modules") {
+        t
+    } else {
+        let t = lua.create_table()?;
+        lua.globals().set("modules", t.clone())?;
+        t
+    };
+
+    if modules_dir.exists() {
+        for entry in fs::read_dir(modules_dir)
+            .unwrap_or_else(|_| fs::read_dir("/dev/null").unwrap())
+            .flatten()
+        {
+            let path = entry.path();
+            if path.is_dir() {
+                let id = path.file_name().unwrap().to_string_lossy().to_string();
+                let package: Table = lua.globals().get("package")?;
+                let old_cpath: String = package.get("cpath")?;
+                let new_cpath = format!("{}/?.so;{old_cpath}", path.to_string_lossy());
+                package.set("cpath", new_cpath)?;
+
+                let lua_file = path.join(format!("{id}.lua"));
+
+                if lua_file.exists() {
+                    match fs::read_to_string(&lua_file) {
+                        Ok(code) => {
+                            match lua
+                                .load(&code)
+                                .set_name(&*lua_file.to_string_lossy())
+                                .eval::<Table>()
+                            {
+                                Ok(module) => {
+                                    modules.set(id.clone(), module.clone())?;
+                                }
+                                Err(e) => {
+                                    warn!("Failed to eval Lua {}: {}", lua_file.display(), e);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to read Lua {}: {e}", lua_file.display());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(all(target_os = "android", target_arch = "aarch64"))]
+pub fn info_lua(lua: &Lua) -> LuaResult<Function> {
+    lua.create_function(|_, msg: String| {
+        info!("[Lua] {msg}");
+        Ok(())
+    })
+}
+
+#[cfg(all(target_os = "android", target_arch = "aarch64"))]
+pub fn warn_lua(lua: &Lua) -> LuaResult<Function> {
+    lua.create_function(|_, msg: String| {
+        warn!("[Lua] {msg}");
+        Ok(())
+    })
+}
+
+#[cfg(all(target_os = "android", target_arch = "aarch64"))]
+pub fn install_module_lua(lua: &Lua) -> LuaResult<Function> {
+    lua.create_function(|_, zip: String| {
+        install_module(&zip)
+            .map_err(|e| mlua::Error::external(format!("install_module failed: {e}")))
+    })
+}
+
+#[cfg(all(target_os = "android", target_arch = "aarch64"))]
+pub fn save_text_lua(lua: &Lua) -> LuaResult<Function> {
+    lua.create_function(|_, (filename, content): (String, String)| {
+        save_text(&filename, &content)
+            .map_err(|e| mlua::Error::external(format!("save filed: {e}")))?;
+        Ok(())
+    })
+}
+
+#[cfg(all(target_os = "android", target_arch = "aarch64"))]
+pub fn read_text_lua(lua: &Lua) -> LuaResult<Function> {
+    lua.create_function(|_, filename: String| {
+        let content = match load_text(&filename) {
+            Ok(s) => s,
+            Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(mlua::Error::external(format!("read failed: {e}"))),
+        };
+        Ok(content)
+    })
+}
+
+#[cfg(all(target_os = "android", target_arch = "aarch64"))]
+pub fn run_lua(id: &str, function: &str, on_each_module: bool, _wait: bool) -> mlua::Result<()> {
+    let lua = unsafe { Lua::unsafe_new() };
+
+    let func = install_module_lua(&lua)?;
+    lua.globals().set("install_module", func)?;
+    lua.globals().set("info", info_lua(&lua)?)?;
+    lua.globals().set("warn", warn_lua(&lua)?)?;
+    lua.globals().set("setConfig", save_text_lua(&lua)?)?;
+    lua.globals().set("getConfig", read_text_lua(&lua)?)?;
+
+    load_all_lua_modules(&lua)?;
+
+    let modules: mlua::Table = lua.globals().get("modules")?;
+    if on_each_module {
+        for pair in modules.pairs::<String, mlua::Table>() {
+            let (_, module_table) = pair?;
+            if let Ok(func_obj) = module_table.get::<mlua::Function>(function) {
+                func_obj.call::<()>(id)?;
+            }
+        }
+    } else {
+        let module_table: mlua::Table = modules.get(id)?;
+        let func_obj: mlua::Function = module_table.get(function)?;
+        func_obj.call::<()>(())?;
     }
 
     Ok(())
@@ -287,13 +449,7 @@ pub fn load_system_prop() -> Result<()> {
         }
         info!("load {} system.prop", module.display());
 
-        // resetprop -n --file system.prop
-        Command::new(assets::RESETPROP_PATH)
-            .arg("-n")
-            .arg("--file")
-            .arg(&system_prop)
-            .status()
-            .with_context(|| format!("Failed to exec {}", system_prop.display()))?;
+        crate::resetprop::load_system_prop_file(&system_prop)?;
 
         Ok(())
     })?;
@@ -313,9 +469,8 @@ pub fn prune_modules() -> Result<()> {
         let module_id = module.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
         // Check if this is a metamodule
-        let is_metamodule = read_module_prop(module)
-            .map(|props| metamodule::is_metamodule(&props))
-            .unwrap_or(false);
+        let is_metamodule =
+            read_module_prop(module).is_ok_and(|props| metamodule::is_metamodule(&props));
 
         if is_metamodule {
             info!("Removing metamodule symlink");
@@ -323,13 +478,13 @@ pub fn prune_modules() -> Result<()> {
                 warn!("Failed to remove metamodule symlink: {e}");
             }
         } else if let Err(e) = metamodule::exec_metauninstall_script(module_id) {
-            warn!("Failed to exec metamodule uninstall for {module_id}: {e}",);
+            warn!("Failed to exec metamodule uninstall for {module_id}: {e}");
         }
 
         // Then execute module's own uninstall.sh
         let uninstaller = module.join("uninstall.sh");
         if uninstaller.exists()
-            && let Err(e) = exec_script(uninstaller, true)
+            && let Err(e) = exec_script(uninstaller, true, defs::EXEC_STAGE_TIMEOUT)
         {
             warn!("Failed to exec uninstaller: {e}");
         }
@@ -356,6 +511,127 @@ pub fn prune_modules() -> Result<()> {
     if remaining_modules.is_empty() {
         info!("no remaining modules.");
     }
+
+    Ok(())
+}
+
+const METADATA_FILE_CON: &str = "u:object_r:metadata_file:s0";
+
+// Prefer /metadata/watchdog/ when present, else /metadata.
+fn preinit_ksu_dir() -> &'static str {
+    if Path::new("/metadata/watchdog").is_dir() {
+        defs::PREINIT_DIR_WATCHDOG
+    } else {
+        defs::PREINIT_DIR_DEFAULT
+    }
+}
+
+fn collect_rc_files<P: AsRef<Path>>(
+    dir: P,
+    mod_id: Option<&str>,
+    out: &mut dyn Write,
+) -> Result<()> {
+    let dir = dir.as_ref();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Ok(());
+    };
+    let mut entries: Vec<_> = entries.flatten().collect();
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        let path = entry.path();
+        let Ok(meta) = entry.metadata() else { continue };
+        if meta.is_file() && path.extension().and_then(|s| s.to_str()) == Some("rc") {
+            if let Some(mod_id) = mod_id {
+                writeln!(out, "# === from {mod_id}:{} ===", path.display())?;
+            } else {
+                // Although the rc file itself is not executable, we still use its executable bit as a switch.
+                if !is_executable(&path) {
+                    continue;
+                }
+                writeln!(out, "# === from {} ===", path.display())?;
+            }
+            let content = std::fs::read(&path)
+                .with_context(|| format!("Failed to read rc {}", path.display()))?;
+            out.write_all(&content)?;
+            writeln!(out)?;
+        }
+    }
+    Ok(())
+}
+
+/// Rebuild PREINITDIR/modules.rc by concatenating *.rc from every enabled
+/// module. The kernel-side read hook splices this file into init.rc on the
+/// next boot.
+pub fn regenerate_preinit_rc() -> Result<()> {
+    let preinit_str = preinit_ksu_dir();
+    let preinit_dir = Path::new(preinit_str);
+    std::fs::create_dir_all(preinit_dir)
+        .with_context(|| format!("Failed to create {}", preinit_dir.display()))?;
+
+    let tmp_path_buf = preinit_dir.join(defs::MODULES_RC_TMP_FILE);
+    let out_path_buf = preinit_dir.join(defs::MODULES_RC_FILE);
+    let tmp_path = tmp_path_buf.as_path();
+    let out_path = out_path_buf.as_path();
+
+    {
+        let mut tmp = File::create(tmp_path)
+            .with_context(|| format!("Failed to create {}", tmp_path.display()))?;
+
+        // collect modules in alphabetical order, with their effective module path in the next boot
+        let mut modules: BTreeMap<String, Option<PathBuf>> = BTreeMap::new();
+        // collect common initrc first
+        collect_rc_files(Path::new(defs::ADB_DIR).join("initrc.d"), None, &mut tmp)?;
+        // modules_update/ first so freshly-installed modules win on id collision.
+        for src_dir in [defs::MODULE_UPDATE_DIR, defs::MODULE_DIR] {
+            let Ok(entries) = std::fs::read_dir(src_dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let module_path = entry.path();
+                if !module_path.is_dir() {
+                    continue;
+                }
+                let Some(id) = module_path.file_name().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                let id = id.to_string();
+                if module_path.join(defs::DISABLE_FILE_NAME).exists()
+                    || module_path.join(defs::REMOVE_FILE_NAME).exists()
+                {
+                    modules.insert(id, None);
+                    continue;
+                }
+                modules.entry(id).or_insert(Some(module_path));
+            }
+        }
+        for (id, path) in modules {
+            if let Some(path) = path {
+                collect_rc_files(path.join(defs::MODULE_INIT_RC_DIR), Some(&id), &mut tmp)?;
+            }
+        }
+        tmp.sync_all()?;
+    }
+
+    std::fs::rename(tmp_path, out_path).with_context(|| {
+        format!(
+            "Failed to rename {} -> {}",
+            tmp_path.display(),
+            out_path.display()
+        )
+    })?;
+
+    // SELinux label so the kernel's filp_open in init context can read it.
+    if let Err(e) = crate::restorecon::lsetfilecon(out_path, METADATA_FILE_CON) {
+        debug!("set context on {} failed: {e}", out_path.display());
+    }
+
+    // Clear stale file at the other candidate path.
+    let stale_dir = if preinit_str == defs::PREINIT_DIR_WATCHDOG {
+        defs::PREINIT_DIR_DEFAULT
+    } else {
+        defs::PREINIT_DIR_WATCHDOG
+    };
+    std::fs::remove_file(Path::new(stale_dir).join(defs::MODULES_RC_FILE)).ok();
 
     Ok(())
 }
@@ -519,7 +795,7 @@ fn install_module_to_system(zip: &str) -> Result<()> {
 
     // Execute install script
     println!("- Running module installer");
-    exec_install_script(zip, is_metamodule)?;
+    exec_install_script(zip, is_metamodule, module_id)?;
 
     let module_dir = Path::new(MODULE_DIR).join(module_id);
     ensure_dir_exists(&module_dir)?;
@@ -545,6 +821,8 @@ pub fn install_module(zip: &str) -> Result<()> {
     let result = install_module_to_system(zip);
     if let Err(ref e) = result {
         println!("- Error: {e}");
+    } else if let Err(e) = regenerate_preinit_rc() {
+        warn!("regenerate preinit rc failed: {e}");
     }
     result
 }
@@ -563,6 +841,10 @@ pub fn undo_uninstall_module(id: &str) -> Result<()> {
         info!("Removed the remove mark for module {id}");
     }
 
+    if let Err(e) = regenerate_preinit_rc() {
+        warn!("regenerate preinit rc failed: {e}");
+    }
+
     Ok(())
 }
 
@@ -578,6 +860,17 @@ pub fn uninstall_module(id: &str) -> Result<()> {
 
     info!("Module {id} marked for removal");
 
+    if let Err(e) = regenerate_preinit_rc() {
+        warn!("regenerate preinit rc failed: {e}");
+    }
+
+    Ok(())
+}
+
+#[cfg(all(target_os = "android", target_arch = "aarch64"))]
+pub fn exec_stage_lua(stage: &str, wait: bool, superkey: &str) -> Result<()> {
+    let stage_safe = stage.replace('-', "_");
+    run_lua(superkey, &stage_safe, true, wait).map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok(())
 }
 
@@ -585,7 +878,18 @@ pub fn run_action(id: &str) -> Result<()> {
     validate_module_id(id)?;
 
     let action_script_path = format!("/data/adb/modules/{id}/action.sh");
-    exec_script(&action_script_path, true)
+    #[cfg(all(target_os = "android", target_arch = "aarch64"))]
+    {
+        if Path::new(&action_script_path).exists() {
+            exec_script(&action_script_path, true, defs::EXEC_STAGE_TIMEOUT)
+        } else {
+            //if no action.sh, try to run lua action
+            run_lua(id, "action", false, true).map_err(|e| anyhow::anyhow!("{e}"))
+        }
+    }
+
+    #[cfg(not(all(target_os = "android", target_arch = "aarch64")))]
+    exec_script(&action_script_path, true, defs::EXEC_STAGE_TIMEOUT)
 }
 
 pub fn enable_module(id: &str) -> Result<()> {
@@ -602,6 +906,10 @@ pub fn enable_module(id: &str) -> Result<()> {
         info!("Module {id} enabled");
     }
 
+    if let Err(e) = regenerate_preinit_rc() {
+        warn!("regenerate preinit rc failed: {e}");
+    }
+
     Ok(())
 }
 
@@ -614,16 +922,28 @@ pub fn disable_module(id: &str) -> Result<()> {
 
     info!("Module {id} disabled");
 
+    if let Err(e) = regenerate_preinit_rc() {
+        warn!("regenerate preinit rc failed: {e}");
+    }
+
     Ok(())
 }
 
 pub fn disable_all_modules() -> Result<()> {
-    mark_all_modules(defs::DISABLE_FILE_NAME)
+    mark_all_modules(defs::DISABLE_FILE_NAME)?;
+    if let Err(e) = regenerate_preinit_rc() {
+        warn!("regenerate preinit rc failed: {e}");
+    }
+    Ok(())
 }
 
 pub fn uninstall_all_modules() -> Result<()> {
     info!("Uninstalling all modules");
-    mark_all_modules(defs::REMOVE_FILE_NAME)
+    mark_all_modules(defs::REMOVE_FILE_NAME)?;
+    if let Err(e) = regenerate_preinit_rc() {
+        warn!("regenerate preinit rc failed: {e}");
+    }
+    Ok(())
 }
 
 fn mark_all_modules(flag_file: &str) -> Result<()> {
@@ -660,6 +980,55 @@ pub fn read_module_prop(module_path: &Path) -> Result<HashMap<String, String>> {
         .with_context(|| format!("Failed to parse module.prop: {}", module_prop.display()))?;
 
     Ok(prop_map)
+}
+
+/// Resolve a module icon path to an absolute on-disk path
+fn resolve_module_icon_path(
+    module_prop_map: &mut HashMap<String, String>,
+    key: &str,
+    module_path: &Path,
+) {
+    if let Some(icon_value) = module_prop_map.get(key) {
+        let icon_value = icon_value.trim();
+        if icon_value.is_empty() {
+            return;
+        }
+        let path = std::path::Path::new(icon_value);
+        if path.is_absolute() {
+            log::warn!(
+                "Rejected {} with absolute path for module {}: {}",
+                key,
+                module_prop_map.get("id").map_or("", String::as_str),
+                icon_value
+            );
+            return;
+        }
+        let has_parent = path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir));
+        if has_parent {
+            log::warn!(
+                "Rejected {} with parent traversal for module {}: {}",
+                key,
+                module_prop_map.get("id").map_or("", String::as_str),
+                icon_value
+            );
+            return;
+        }
+        let candidate = module_path.join(path);
+        if candidate.exists() && candidate.is_file() {
+            if let Some(s) = candidate.to_str() {
+                module_prop_map.insert(key.to_owned(), s.to_string());
+            }
+        } else {
+            log::debug!(
+                "{} not found for module {}: {}",
+                key,
+                module_prop_map.get("id").map_or("", String::as_str),
+                candidate.display()
+            );
+        }
+    }
 }
 
 fn list_module(path: &str) -> Vec<HashMap<String, String>> {
@@ -721,6 +1090,9 @@ fn list_module(path: &str) -> Vec<HashMap<String, String>> {
         module_prop_map.insert("web".to_owned(), web.to_string());
         module_prop_map.insert("action".to_owned(), action.to_string());
         module_prop_map.insert("mount".to_owned(), need_mount.to_string());
+
+        resolve_module_icon_path(&mut module_prop_map, "actionIcon", &path);
+        resolve_module_icon_path(&mut module_prop_map, "webuiIcon", &path);
 
         // Apply module config overrides and extract managed features
         if let Some(module_id) = module_prop_map.get("id")

@@ -2,7 +2,7 @@
 <img align='right' src='SukiSU-mini.svg' width='220px' alt="sukisu logo">
 
 
-[English](../README.md) | [简体中文](../zh/README.md) | **日本語** | [Türkçe](../tr/README.md) | [Русский](../ru/README.md)
+[English](../README.md) | [简体中文](../zh/README.md) | **日本語** | [Türkçe](../tr/README.md)
 
 [KernelSU](https://github.com/tiann/KernelSU) をベースとした Android デバイスの root ソリューション
 
@@ -24,7 +24,7 @@ curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kern
 非 GKI のデバイスに対応するブランチを使用 (susfs を手動で統合が必要)
 
 ```
-curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s nongki
+curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s builtin
 ```
 
 ## 統合された susfs の使い方

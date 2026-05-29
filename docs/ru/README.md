@@ -1,10 +1,10 @@
 # SukiSU Ultra
-<img align='right' src='SukiSU-mini.svg' width='220px' alt="sukisu logo">
+<img align='right' src='SukiSU-mini.svg' width='220px' alt="логотип sukisu">
 
 
-[English](../README.md) | [简体中文](../zh/README.md) | [日本語](../ja/README.md) | [Türkçe](./tr/README.md) | **Русский**
+[English](../README.md) | [简体中文](./zh/README.md) | [日本語](./ja/README.md) | [Türkçe](./tr/README.md) | **Русский**
 
-Решение для получения root доступа на основе ядра для устройств Android, форкнутый от [`tiann/KernelSU`](https://github.com/tiann/KernelSU) с добавлением некоторых интересных изменений.
+Решение для получения root-прав на уровне ядра для устройств Android. Форк [`tiann/KernelSU`](https://github.com/tiann/KernelSU) с добавлением интересных изменений.
 
 [![Latest release](https://img.shields.io/github/v/release/SukiSU-Ultra/SukiSU-Ultra?label=Release&logo=github)](https://github.com/tiann/KernelSU/releases/latest)
 [![Channel](https://img.shields.io/badge/Follow-Telegram-blue.svg?logo=telegram)](https://t.me/Sukiksu)
@@ -13,40 +13,38 @@
 
 ## Особенности
 
-1. Управление `su` и root доступом на основе ядра
-2. Система модулей основанная на [Magic Mount](https://github.com/5ec1cff/KernelSU)
-   > **Note:** SukiSU теперь делегирует все операции по монтированию модулей установленному *метамодулю*; ядро ​​больше не обрабатывает операции по монтированию.
-3. [App Profile](https://kernelsu.org/guide/app-profile.html): Запереть root-доступ в клетку
-4. Поддержка не-GKI и GKI 1.0
-5. Поддержка KPM
-6. Настройки темы менеджера и встроенного инструмента управления susfs.
+1. Управление доступом `su` и root на уровне ядра.
+2. [App Profile](https://kernelsu.org/guide/app-profile.html): закройте root-права для конкретных приложений.
+3. Поддержка non-GKI и GKI 1.0.
+4. Поддержка KPM.
+5. Изменения в теме менеджера и встроенный susfs.
 
 ## Статус совместимости
 
-- SukiSU официально поддерживает устройства с Android GKI 2.0 (ядро 5.10+).
+- KernelSU (до v1.0.0) официально поддерживает устройства Android GKI 2.0 (ядро 5.10+).
 
-- Другие ядра (4.4+) также поддерживаются, но ядро придётся собирать вручную.
+- Более старые ядра (4.4+) также совместимы, но ядро придется собирать вручную.
 
-- С добавлением большего количества бэкпортов SukiSU сможет поддерживать ядро 3.x (от 3.4 до 3.18).
+- С дополнительными бэкпортами KernelSU может поддерживать ядра серии 3.x (3.4–3.18).
 
-- В настоящее время поддерживаются только `arm64-v8a`, `armeabi-v7a (голое)` и `X86_64 (некоторые)`.
+- На данный момент поддерживаются только архитектуры `arm64-v8a`, `armeabi-v7a (bare)` и некоторые `X86_64`.
 
 ## Установка
 
-Просмотрите [`guide/installation.md`](guide/installation.md)
+См. [`guide/installation.md`](guide/installation.md)
 
 ## Интеграция
 
-Просмотрите [`guide/how-to-integrate.md`](guide/how-to-integrate.md)
+См. [`guide/how-to-integrate.md`](guide/how-to-integrate.md)
 
 ## Перевод
 
-Если вам нужно отправить перевод для менеджера, пожалуйста перейдите на [Crowdin](https://crowdin.com/project/SukiSU-Ultra).
+Если вы хотите предложить перевод для менеджера, пожалуйста, воспользуйтесь [Crowdin](https://crowdin.com/project/SukiSU-Ultra).
 
 ## Поддержка KPM
 
-- На основе KernelPatch мы удалили функции, дублирующие возможности KSU, и оставили только поддержку KPM.
-- Работа в процессе: расширение совместимости с APatch путём интеграции дополнительных функций для обеспечения работы на разных реализациях.
+- На базе KernelPatch: мы удалили функции, дублирующие возможности KSU, оставив только поддержку KPM.
+- В разработке: расширение совместимости с APatch путем интеграции дополнительных функций для обеспечения работы в различных реализациях.
 
 **Open-source репозиторий**: [https://github.com/ShirkNeko/SukiSU_KernelPatch_patch](https://github.com/ShirkNeko/SukiSU_KernelPatch_patch)
 
@@ -54,49 +52,49 @@
 
 > [!Note]
 >
-> 1. Требует `CONFIG_KPM=y`
-> 2. Не-GKI устройства требуют `CONFIG_KALLSYMS=y` и `CONFIG_KALLSYMS_ALL=y`
-> 3. Для ядер ниже версии `4.19` требуется бэкпортировать `set_memory.h` из версии `4.19`.
+> 1. Требуется `CONFIG_KPM=y`
+> 2. Для non-GKI устройств требуются `CONFIG_KALLSYMS=y` и `CONFIG_KALLSYMS_ALL=y`
+> 3. Для ядер ниже `4.19` требуется бэкпорт `set_memory.h` из версии `4.19`.
 
 ## Устранение неполадок
 
-1. Устройство зависло при удалении приложения-менеджера?
-   Удалите _com.sony.playmemories.mobile_
+1. Если устройство зависает при удалении менеджера (sukisu) 
+   Удалите com.sony.playmemories.mobile
 
 ## Спонсоры
 
-- [ShirkNeko](https://afdian.com/a/shirkneko) (мейнтейнер SukiSU)
+- [ShirkNeko](https://afdian.com/a/shirkneko) (поддерживает SukiSU)
 - [weishu](https://github.com/sponsors/tiann) (автор KernelSU)
 
 ## Список спонсоров ShirkNeko
 
 - [Ktouls](https://github.com/Ktouls) Большое спасибо за поддержку.
-- [zaoqi123](https://github.com/zaoqi123) Спасибо за молочный чай.
-- [wswzgdg](https://github.com/wswzgdg) Большое спасибо за поддержку этого проекта.
-- [yspbwx2010](https://github.com/yspbwx2010) Большое спасбо.
+- [zaoqi123](https://github.com/zaoqi123) Спасибо за чай с молоком.
+- [wswzgdg](https://github.com/wswzgdg) Огромное спасибо за поддержку проекта.
+- [yspbwx2010](https://github.com/yspbwx2010) Большое спасибо.
 - [DARKWWEE](https://github.com/DARKWWEE) 100 USDT
-- [Saksham Singla](https://github.com/TypeFlu) Предоставил и мейнтейнит сайт
-- [OukaroMF](https://github.com/OukaroMF) Пожертвование доменного имени сайта
+- [Saksham Singla](https://github.com/TypeFlu) Предоставление и поддержка сайта.
+- [OukaroMF](https://github.com/OukaroMF) Пожертвование доменного имени для сайта.
 
-## Лицензии
+## Лицензия
 
-- Файлы в директории 'kernel' под [GPL-2.0-only](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html) лицензией.
-- Изображения файлов `ic_launcher(?!.*alt.*).*` с наклейками аниме-персонажей защищены авторским правом [怡子曰曰](https://space.bilibili.com/10545509). Права на бренд, изображённый на картинках, принадлежат [明风 OuO](https://space.bilibili.com/274939213), а векторизацию выполнил @MiRinChan. Перед использованием этих файлов, помимо соблюдения условий [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International](https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode.txt), необходимо также получить разрешение двух авторов на использование этих художественных материалов.
-- За исключением тех файлов/директорий упомянутых выше, всё остальное под [GPL-3.0 or later](https://www.gnu.org/licenses/gpl-3.0.html) лицензией.
+- Файлы в директории «kernel» находятся под лицензией [GPL-2.0-only](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
+- Изображения файлов `ic_launcher(?!.*alt.*).*` со стикерами аниме-персонажей защищены авторским правом [怡子曰曰](https://space.bilibili.com/10545509), права на интеллектуальную собственность бренда на изображениях принадлежат [明风 OuO](https://space.bilibili.com/274939213), векторизация выполнена @MiRinChan. Перед использованием этих файлов, помимо соблюдения [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International](https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode.txt), вам также необходимо получить разрешение от двух авторов на использование этого художественного контента.
+- За исключением вышеуказанных файлов и директорий, все остальные части находятся под лицензией [GPL-3.0 or later](https://www.gnu.org/licenses/gpl-3.0.html)
 
 ## Благодарности
 
-- [KernelSU](https://github.com/tiann/KernelSU): Исходный
-- [MKSU](https://github.com/5ec1cff/KernelSU): Magic Mount
-- [RKSU](https://github.com/rsuntk/KernelsU): поддержка не-GKI
-- [susfs](https://gitlab.com/simonpunk/susfs4ksu): Дополнение патчей ядра и модуля пользовательского пространства для сокрытия root в KernelSU.
-- [KernelPatch](https://github.com/bmax121/KernelPatch): KernelPatch является ключевой частью реализации APatch в модуле ядра.
+- [KernelSU](https://github.com/tiann/KernelSU): база (основа).
+- [MKSU](https://github.com/5ec1cff/KernelSU): Magic Mount.
+- [RKSU](https://github.com/rsuntk/KernelsU): поддержка non-GKI.
+- [susfs](https://gitlab.com/simonpunk/susfs4ksu): дополнение для скрытия root в ядре и модуль пространства пользователя для KernelSU.
+- [KernelPatch](https://github.com/bmax121/KernelPatch): ключевая часть реализации модулей ядра в APatch.
 
 <details>
-<summary>Благодарности KernelSU</summary>
+<summary>Благодарности команды KernelSU</summary>
 
 - [Kernel-Assisted Superuser](https://git.zx2c4.com/kernel-assisted-superuser/about/): Идея KernelSU.
-- [Magisk](https://github.com/topjohnwu/Magisk): Сильная root утилита.
-- [genuine](https://github.com/brevent/genuine/): Валидация сигнатур APK v2.
-- [Diamorphine](https://github.com/m0nad/Diamorphine): Немного rookit навыков
+- [Magisk](https://github.com/topjohnwu/Magisk): Мощный инструмент для получения root-прав.
+- [genuine](https://github.com/brevent/genuine/): Проверка подписи APK v2.
+- [Diamorphine](https://github.com/m0nad/Diamorphine): Некоторые техники руткитов.
 </details>

@@ -1,4 +1,7 @@
 name: Release
+permissions:
+  contents: write
+  actions: write
 on:
   push:
     tags:
@@ -15,7 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
+
       - name: Rename ksud
         run: |
           mkdir -p ksud
@@ -63,6 +67,7 @@ jobs:
       - name: release
         uses: softprops/action-gh-release@v2
         with:
+          token: ${{ secrets.GH_TOKEN }}
           files: |
             manager/*.apk
             android*-lkm/*_kernelsu.ko

@@ -8,11 +8,23 @@ import android.system.Os
  */
 
 data class KernelVersion(val major: Int, val patchLevel: Int, val subLevel: Int) {
-    override fun toString(): String = "$major.$patchLevel.$subLevel"
-    fun isGKI(): Boolean = when {
-        major > 5 -> true
-        major == 5 && patchLevel >= 10 -> true
-        else -> false
+    override fun toString(): String {
+        return "$major.$patchLevel.$subLevel"
+    }
+
+    fun isGKI(): Boolean {
+
+        // kernel 6.x
+        if (major > 5) {
+            return true
+        }
+
+        // kernel 5.10.x
+        if (major == 5) {
+            return patchLevel >= 10
+        }
+
+        return false
     }
 }
 

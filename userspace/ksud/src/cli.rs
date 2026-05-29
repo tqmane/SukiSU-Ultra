@@ -3,13 +3,15 @@ use clap::Parser;
 use std::path::PathBuf;
 
 use android_logger::Config;
-use log::LevelFilter;
+use log::{LevelFilter, error, info};
 
 use crate::boot_patch::{BootPatchArgs, BootRestoreArgs};
+use crate::module::regenerate_preinit_rc;
 #[cfg(target_arch = "aarch64")]
 use crate::susfs;
 use crate::{
-    apk_sign, assets, debug, defs, init_event, ksucalls, module, module_config, umount, utils,
+    apk_sign, assets, debug, defs, init_event, ksucalls, module, module_config, sulog, umount,
+    utils,
 };
 
 /// KernelSU userspace cli
@@ -21,6 +23,7 @@ struct Args {
 }
 
 #[derive(clap::Subcommand, Debug)]
+#[allow(clippy::large_enum_variant)]
 enum Commands {
     /// Manage KernelSU modules
     Module {
@@ -34,27 +37,69 @@ enum Commands {
     /// Trigger `service` event
     Services,
 
+    /// Run sulog reader daemon. Not for user. Use `ksud debug sulogd` to launch daemon.
+    #[command(hide = true)]
+    Sulogd,
+
     /// Trigger `boot-complete` event
     BootCompleted,
 
-    #[cfg(target_arch = "aarch64")]
-    /// Susfs
-    Susfs {
-        #[command(subcommand)]
-        command: Susfs,
+    /// Load kernelsu.ko and execute late-load stage scripts
+    LateLoad {
+        /// Use adb root to execute late-load for jailbreaking by Magica
+        #[arg(long, default_missing_value = "5555", num_args = 0..=1)]
+        magica: Option<u16>,
+
+        /// Pass allow_shell=1 when loading kernelsu.ko
+        #[arg(long)]
+        allow_shell: bool,
+
+        /// Restore adb properties after magica late-load
+        #[arg(long)]
+        post_magica: bool,
+
+        /// Specify kernel KMI version instead of auto-detection
+        #[arg(long)]
+        kmi: Option<String>,
+
+        /// manager package name
+        #[arg(long, default_value_t = String::from("com.sukisu.ultra"))]
+        package_name: String,
+
+        /// kernel release string to spoof
+        #[arg(long)]
+        spoof_release: Option<String>,
+
+        /// kernel version string to spoof
+        #[arg(long)]
+        spoof_version: Option<String>,
+    },
+
+    /// Emulate system reboot
+    SoftReboot,
+
+    /// Load a kernel module with kallsyms access
+    Insmod {
+        /// kernel module path
+        module: PathBuf,
+        /// module load parameters (e.g. key=val key2=val2)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0..)]
+        params: Vec<String>,
     },
 
     /// Install KernelSU userspace component to system
     Install {
         #[arg(long, default_value = None)]
-        magiskboot: Option<PathBuf>,
+        libadbroot: Option<PathBuf>,
     },
+
+    /// Unload KernelSU kernel module (LKM Only)
+    Unload,
 
     /// Uninstall KernelSU modules and itself(LKM Only)
     Uninstall {
-        /// magiskboot path, if not specified, will search from $PATH
-        #[arg(long, default_value = None)]
-        magiskboot: Option<PathBuf>,
+        #[arg(long, default_value_t = String::from("com.sukisu.ultra"))]
+        package_name: String,
     },
 
     /// SELinux policy Patch tool
@@ -87,11 +132,30 @@ enum Commands {
         command: BootInfo,
     },
 
-    /// KPM module manager
-    #[cfg(target_arch = "aarch64")]
-    Kpm {
+    /// For developers
+    Debug {
         #[command(subcommand)]
-        command: kpm_cmd::Kpm,
+        command: Debug,
+    },
+
+    /// Kernel interface
+    Kernel {
+        #[command(subcommand)]
+        command: Kernel,
+    },
+
+    /// Resetprop - Magisk-compatible system property tool
+    #[command(disable_help_flag = true)]
+    Resetprop {
+        /// Arguments passed to resetprop
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0..)]
+        args: Vec<String>,
+    },
+
+    /// Manage initrc injection
+    Initrc {
+        #[command(subcommand)]
+        command: Initrc,
     },
 
     /// Manage kernel umount paths
@@ -100,15 +164,18 @@ enum Commands {
         command: Umount,
     },
 
-    /// For developers
-    Debug {
+    /// KPM module manager
+    #[cfg(target_arch = "aarch64")]
+    Kpm {
         #[command(subcommand)]
-        command: Debug,
+        command: kpm_cmd::Kpm,
     },
-    /// Kernel interface
-    Kernel {
+
+    #[cfg(target_arch = "aarch64")]
+    /// Susfs
+    Susfs {
         #[command(subcommand)]
-        command: Kernel,
+        command: Susfs,
     },
     /// Dump kernel sulog to file (/data/adb/ksu/log/sulog.log)
     SulogDump,
@@ -137,6 +204,9 @@ enum BootInfo {
         #[arg(short = 'u', long, default_value = "false")]
         ota: bool,
     },
+
+    /// read ksu_config from ramdisk
+    ReadConfig,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -167,11 +237,22 @@ enum Debug {
     /// For testing
     Test,
 
+    /// Extract an embedded binary to a specified path
+    ExtractBinary {
+        /// binary name (e.g. busybox, resetprop, bootctl)
+        name: String,
+        /// destination file path
+        path: PathBuf,
+    },
+
     /// Process mark management
     Mark {
         #[command(subcommand)]
         command: MarkCommand,
     },
+
+    /// Launch sulogd daemon manually
+    Sulogd,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -260,11 +341,23 @@ enum Module {
         id: String,
     },
 
+    /// module lua runner
+    #[cfg(all(target_os = "android", target_arch = "aarch64"))]
+    Lua {
+        // module id
+        id: String,
+        // lua function
+        function: String,
+    },
+
     /// list all modules
     List,
 
     /// manage module configuration
     Config {
+        /// target internal module name (resolved as internal.<name>)
+        #[arg(long)]
+        internal: Option<String>,
         #[command(subcommand)]
         command: ModuleConfigCmd,
     },
@@ -356,8 +449,11 @@ enum Profile {
 enum Feature {
     /// Get feature value and support status
     Get {
-        /// Feature ID or name (su_compat, kernel_umount)
+        /// Feature ID or name (su_compat, kernel_umount, sulog, adb_root, selinux_hide)
         id: String,
+        /// Read from config file
+        #[arg(long, default_value_t = false)]
+        config: bool,
     },
 
     /// Set feature value
@@ -373,7 +469,7 @@ enum Feature {
 
     /// Check feature status (supported/unsupported/managed)
     Check {
-        /// Feature ID or name (su_compat, kernel_umount)
+        /// Feature ID or name (su_compat, kernel_umount, sulog, adb_root, selinux_hide)
         id: String,
     },
 
@@ -398,6 +494,40 @@ enum Kernel {
     },
     /// Notify that module is mounted
     NotifyModuleMounted,
+    /// Spoof kernel release and version strings
+    SpoofUname {
+        /// kernel release string (e.g. 5.10.117-android12-9)
+        #[arg(short, long)]
+        release: Option<String>,
+        /// kernel version string (e.g. #1 SMP PREEMPT Mon May 19 2026)
+        #[arg(short, long)]
+        version: Option<String>,
+    },
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum UmountOp {
+    /// Add mount point to umount list
+    Add {
+        /// mount point path
+        mnt: String,
+        /// umount flags (default: 0, MNT_DETACH: 2)
+        #[arg(short, long, default_value = "0")]
+        flags: u32,
+    },
+    /// Delete mount point from umount list
+    Del {
+        /// mount point path
+        mnt: String,
+    },
+    /// Wipe all entries from umount list
+    Wipe,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum Initrc {
+    /// Regenerate preinit rc file
+    Refresh,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -423,25 +553,6 @@ enum Umount {
     Apply,
     /// Clear custom umount paths (wipe kernel list)
     ClearCustom,
-}
-
-#[derive(clap::Subcommand, Debug)]
-enum UmountOp {
-    /// Add mount point to umount list
-    Add {
-        /// mount point path
-        mnt: String,
-        /// umount flags (default: 0, MNT_DETACH: 2)
-        #[arg(short, long, default_value = "0")]
-        flags: u32,
-    },
-    /// Delete mount point from umount list
-    Del {
-        /// mount point path
-        mnt: String,
-    },
-    /// Wipe all entries from umount list
-    Wipe,
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -492,6 +603,11 @@ pub fn run() -> Result<()> {
         return crate::su::root_shell();
     }
 
+    if arg0.ends_with("resetprop") {
+        let all_args: Vec<String> = std::env::args().collect();
+        crate::resetprop::resetprop_main(&all_args)
+    }
+
     let cli = Args::parse();
 
     log::info!("command: {:?}", cli.command);
@@ -502,17 +618,11 @@ pub fn run() -> Result<()> {
             init_event::on_boot_completed();
             Ok(())
         }
-        #[cfg(target_arch = "aarch64")]
-        Commands::Susfs { command } => {
-            match command {
-                Susfs::Version => println!("{}", susfs::get_susfs_version()),
 
-                Susfs::Status => println!("{}", susfs::get_susfs_status()),
+        Commands::SoftReboot => init_event::soft_reboot(),
 
-                Susfs::Features => println!("{}", susfs::get_susfs_features()),
-            }
-            Ok(())
-        }
+        Commands::Insmod { module, params } => debug::insmod(&module, &params),
+
         Commands::Module { command } => {
             utils::switch_mnt_ns(1)?;
             match command {
@@ -522,12 +632,21 @@ pub fn run() -> Result<()> {
                 Module::Enable { id } => module::enable_module(&id),
                 Module::Disable { id } => module::disable_module(&id),
                 Module::Action { id } => module::run_action(&id),
+                #[cfg(all(target_os = "android", target_arch = "aarch64"))]
+                Module::Lua { id, function } => {
+                    module::run_lua(&id, &function, false, true).map_err(|e| anyhow::anyhow!("{e}"))
+                }
                 Module::List => module::list_modules(),
-                Module::Config { command } => {
-                    // Get module ID from environment variable
-                    let module_id = std::env::var("KSU_MODULE").map_err(|_| {
-                        anyhow::anyhow!("This command must be run in the context of a module")
-                    })?;
+                Module::Config { internal, command } => {
+                    let module_id = match internal {
+                        Some(internal_name) => format!("internal.{internal_name}"),
+                        None => std::env::var("KSU_MODULE").map_err(|_| {
+                            anyhow::anyhow!(
+                                "This command must be run in the context of a module or passed --internal <name>"
+                            )
+                        })?,
+                    };
+                    crate::module::validate_module_id(&module_id)?;
 
                     match command {
                         ModuleConfigCmd::Get { key } => {
@@ -610,17 +729,53 @@ pub fn run() -> Result<()> {
                 }
             }
         }
-        Commands::Install { magiskboot } => utils::install(magiskboot),
-        Commands::Uninstall { magiskboot } => utils::uninstall(magiskboot),
+        Commands::Install { libadbroot } => utils::install(libadbroot),
+        Commands::Unload => crate::unload::unload(),
+        Commands::Uninstall { package_name } => utils::uninstall(&package_name),
         Commands::Sepolicy { command } => match command {
             Sepolicy::Patch { sepolicy } => crate::sepolicy::live_patch(&sepolicy),
             Sepolicy::Apply { file } => crate::sepolicy::apply_file(file),
             Sepolicy::Check { sepolicy } => crate::sepolicy::check_rule(&sepolicy),
         },
+        Commands::LateLoad {
+            magica,
+            allow_shell,
+            post_magica,
+            kmi,
+            package_name,
+            spoof_release,
+            spoof_version,
+        } => {
+            if let Some(port) = magica {
+                return crate::magica::run(port, &package_name, allow_shell).map_err(|e| {
+                    error!("Error running magica: {e}");
+                    e
+                });
+            }
+            let result = crate::late_load::run(
+                &package_name,
+                kmi,
+                allow_shell,
+                spoof_release.as_ref(),
+                spoof_version.as_ref(),
+            );
+            if post_magica {
+                info!("Restoring adb properties (post-magica cleanup)...");
+                if let Err(e) = crate::magica::disable_adb_root() {
+                    error!("disable adb root failed: {e}");
+                }
+            }
+            result
+        }
         Commands::Services => {
+            if ksucalls::get_version() <= 0 {
+                info!("KernelSU not available, exiting services");
+                std::process::exit(0);
+            }
             init_event::on_services();
             Ok(())
         }
+        Commands::Sulogd => sulog::run_sulogd(),
         Commands::Profile { command } => match command {
             Profile::GetSepolicy { package } => crate::profile::get_sepolicy(package),
             Profile::SetSepolicy { package, policy } => {
@@ -633,7 +788,13 @@ pub fn run() -> Result<()> {
         },
 
         Commands::Feature { command } => match command {
-            Feature::Get { id } => crate::feature::get_feature(&id),
+            Feature::Get { id, config } => {
+                if config {
+                    crate::feature::get_feature_config(&id)
+                } else {
+                    crate::feature::get_feature(&id)
+                }
+            }
             Feature::Set { id, value } => crate::feature::set_feature(&id, value),
             Feature::List => {
                 crate::feature::list_features();
@@ -657,12 +818,17 @@ pub fn run() -> Result<()> {
             }
             Debug::Su { global_mnt } => crate::su::grant_root(global_mnt),
             Debug::Test => assets::ensure_binaries(false),
+            Debug::ExtractBinary { name, path } => {
+                let data = assets::get_asset_data(&name)?;
+                utils::ensure_binary(&path, &data, false)
+            }
             Debug::Mark { command } => match command {
                 MarkCommand::Get { pid } => debug::mark_get(pid),
                 MarkCommand::Mark { pid } => debug::mark_set(pid),
                 MarkCommand::Unmark { pid } => debug::mark_unset(pid),
                 MarkCommand::Refresh => debug::mark_refresh(),
             },
+            Debug::Sulogd => sulog::ensure_sulogd_running(),
         },
 
         Commands::BootPatch(boot_patch) => crate::boot_patch::patch(boot_patch),
@@ -706,20 +872,21 @@ pub fn run() -> Result<()> {
                 }
                 return Ok(());
             }
+            BootInfo::ReadConfig => {
+                let config = crate::boot_patch::read_ksu_config()?;
+                for line in &config {
+                    println!("{line}");
+                }
+                return Ok(());
+            }
         },
         Commands::BootRestore(boot_restore) => crate::boot_patch::restore(boot_restore),
-        Commands::Umount { command } => match command {
-            Umount::Add { mnt, flags } => ksucalls::umount_list_add(&mnt, flags),
-            Umount::Remove { mnt } => umount::remove_umount_entry_from_config(&mnt),
-            Umount::List => {
-                let list = ksucalls::umount_list_list()?;
-                print!("{list}");
-                Ok(())
-            }
-            Umount::Save => umount::save_umount_config(),
-            Umount::Apply => umount::apply_umount_config(),
-            Umount::ClearCustom => umount::clear_umount_config(),
-        },
+        Commands::Resetprop { args } => {
+            let mut full_args = vec!["resetprop".to_string()];
+            full_args.extend(args);
+            crate::resetprop::resetprop_main(&full_args)
+        }
+
         Commands::Kernel { command } => match command {
             Kernel::NukeExt4Sysfs { mnt } => ksucalls::nuke_ext4_sysfs(&mnt),
             Kernel::Umount { command } => match command {
@@ -731,6 +898,26 @@ pub fn run() -> Result<()> {
                 ksucalls::report_module_mounted();
                 Ok(())
             }
+            Kernel::SpoofUname { release, version } => {
+                let r = release.unwrap_or_default();
+                let v = version.unwrap_or_default();
+                ksucalls::set_spoof_version(&r, &v)
+            }
+        },
+        Commands::Initrc { command } => match command {
+            Initrc::Refresh => regenerate_preinit_rc(),
+        },
+        Commands::Umount { command } => match command {
+            Umount::Add { mnt, flags } => ksucalls::umount_list_add(&mnt, flags),
+            Umount::Remove { mnt } => umount::remove_umount_entry_from_config(&mnt),
+            Umount::List => {
+                let list = ksucalls::umount_list_list()?;
+                print!("{list}");
+                Ok(())
+            }
+            Umount::Save => umount::save_umount_config(),
+            Umount::Apply => umount::apply_umount_config(),
+            Umount::ClearCustom => umount::clear_umount_config(),
         },
         Commands::SulogDump => {
             ksucalls::dump_sulog_to_file()?;
@@ -755,6 +942,17 @@ pub fn run() -> Result<()> {
                 }
                 Kpm::Version => crate::kpm::version(),
             }
+        }
+        #[cfg(target_arch = "aarch64")]
+        Commands::Susfs { command } => {
+            match command {
+                Susfs::Version => println!("{}", susfs::get_susfs_version()),
+
+                Susfs::Status => println!("{}", susfs::get_susfs_status()),
+
+                Susfs::Features => println!("{}", susfs::get_susfs_features()),
+            }
+            Ok(())
         }
     };
 

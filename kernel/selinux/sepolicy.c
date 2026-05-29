@@ -1,10 +1,18 @@
+#include "ss/avtab.h"
+#include "ss/constraint.h"
+#include "ss/ebitmap.h"
+#include "ss/hashtab.h"
+#include "ss/policydb.h"
+#include "ss/services.h"
+#include <linux/err.h>
 #include <linux/gfp.h>
 #include <linux/printk.h>
 #include <linux/slab.h>
 #include <linux/version.h>
+#include <linux/vmalloc.h>
 
 #include "sepolicy.h"
-#include "../klog.h" // IWYU pragma: keep
+#include "klog.h" // IWYU pragma: keep
 #include "ss/symtab.h"
 
 #define KSU_SUPPORT_ADD_TYPE
@@ -13,45 +21,38 @@
 // Declaration
 //////////////////////////////////////////////////////
 
-static struct avtab_node *get_avtab_node(struct policydb *db,
-                                         struct avtab_key *key,
+static struct avtab_node *get_avtab_node(struct policydb *db, struct avtab_key *key,
                                          struct avtab_extended_perms *xperms);
 
-static bool add_rule(struct policydb *db, const char *s, const char *t,
-                     const char *c, const char *p, int effect, bool invert);
+static bool is_redundant_avtab_node(struct avtab_node *node);
 
-static void add_rule_raw(struct policydb *db, struct type_datum *src,
-                         struct type_datum *tgt, struct class_datum *cls,
+static bool remove_avtab_node(struct policydb *db, struct avtab_node *node);
+
+static bool add_rule(struct policydb *db, const char *s, const char *t, const char *c, const char *p, int effect,
+                     bool invert);
+
+static bool add_rule_raw(struct policydb *db, struct type_datum *src, struct type_datum *tgt, struct class_datum *cls,
                          struct perm_datum *perm, int effect, bool invert);
 
-static void add_xperm_rule_raw(struct policydb *db, struct type_datum *src,
-                               struct type_datum *tgt, struct class_datum *cls,
-                               uint16_t low, uint16_t high, int effect,
-                               bool invert);
-static bool add_xperm_rule(struct policydb *db, const char *s, const char *t,
-                           const char *c, const char *range, int effect,
-                           bool invert);
+static void add_xperm_rule_raw(struct policydb *db, struct type_datum *src, struct type_datum *tgt,
+                               struct class_datum *cls, uint16_t low, uint16_t high, int effect, bool invert);
+static bool add_xperm_rule(struct policydb *db, const char *s, const char *t, const char *c, const char *range,
+                           int effect, bool invert);
 
-static bool add_type_rule(struct policydb *db, const char *s, const char *t,
-                          const char *c, const char *d, int effect);
+static bool add_type_rule(struct policydb *db, const char *s, const char *t, const char *c, const char *d, int effect);
 
-static bool add_filename_trans(struct policydb *db, const char *s,
-                               const char *t, const char *c, const char *d,
+static bool add_filename_trans(struct policydb *db, const char *s, const char *t, const char *c, const char *d,
                                const char *o);
 
-static bool add_genfscon(struct policydb *db, const char *fs_name,
-                         const char *path, const char *context);
+static bool add_genfscon(struct policydb *db, const char *fs_name, const char *path, const char *context);
 
 static bool add_type(struct policydb *db, const char *type_name, bool attr);
 
-static bool set_type_state(struct policydb *db, const char *type_name,
-                           bool permissive);
+static bool set_type_state(struct policydb *db, const char *type_name, bool permissive);
 
-static void add_typeattribute_raw(struct policydb *db, struct type_datum *type,
-                                  struct type_datum *attr);
+static void add_typeattribute_raw(struct policydb *db, struct type_datum *type, struct type_datum *attr);
 
-static bool add_typeattribute(struct policydb *db, const char *type,
-                              const char *attr);
+static bool add_typeattribute(struct policydb *db, const char *type, const char *attr);
 
 //////////////////////////////////////////////////////
 // Implementation
@@ -61,19 +62,17 @@ static bool add_typeattribute(struct policydb *db, const char *type,
 // rules
 #define strip_av(effect, invert) ((effect == AVTAB_AUDITDENY) == !invert)
 
-#define ksu_hash_for_each(node_ptr, n_slot, cur)                               \
-    int i;                                                                     \
-    for (i = 0; i < n_slot; ++i)                                               \
+#define ksu_hash_for_each(node_ptr, n_slot, cur)                                                                       \
+    int i;                                                                                                             \
+    for (i = 0; i < n_slot; ++i)                                                                                       \
         for (cur = node_ptr[i]; cur; cur = cur->next)
 
 // htable is a struct instead of pointer above 5.8.0:
 // https://elixir.bootlin.com/linux/v5.8-rc1/source/security/selinux/ss/symtab.h
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
-#define ksu_hashtab_for_each(htab, cur)                                        \
-    ksu_hash_for_each(htab.htable, htab.size, cur)
+#define ksu_hashtab_for_each(htab, cur) ksu_hash_for_each(htab.htable, htab.size, cur)
 #else
-#define ksu_hashtab_for_each(htab, cur)                                        \
-    ksu_hash_for_each(htab->htable, htab->size, cur)
+#define ksu_hashtab_for_each(htab, cur) ksu_hash_for_each(htab->htable, htab->size, cur)
 #endif
 
 // symtab_search is introduced on 5.9.0:
@@ -83,11 +82,9 @@ static bool add_typeattribute(struct policydb *db, const char *type,
 #define symtab_insert(s, name, datum) hashtab_insert((s)->table, name, datum)
 #endif
 
-#define avtab_for_each(avtab, cur)                                             \
-    ksu_hash_for_each(avtab.htable, avtab.nslot, cur);
+#define avtab_for_each(avtab, cur) ksu_hash_for_each(avtab.htable, avtab.nslot, cur);
 
-static struct avtab_node *get_avtab_node(struct policydb *db,
-                                         struct avtab_key *key,
+static struct avtab_node *get_avtab_node(struct policydb *db, struct avtab_key *key,
                                          struct avtab_extended_perms *xperms)
 {
     struct avtab_node *node;
@@ -123,6 +120,8 @@ static struct avtab_node *get_avtab_node(struct policydb *db,
         }
         /* this is used to get the node - insertion is actually unique */
         node = avtab_insert_nonunique(&db->te_avtab, key, &avdatum);
+        if (!node)
+            return NULL;
 
         int grow_size = sizeof(struct avtab_key);
         grow_size += sizeof(struct avtab_datum);
@@ -137,8 +136,63 @@ static struct avtab_node *get_avtab_node(struct policydb *db,
     return node;
 }
 
-static bool add_rule(struct policydb *db, const char *s, const char *t,
-                     const char *c, const char *p, int effect, bool invert)
+static bool is_redundant_avtab_node(struct avtab_node *node)
+{
+    if (node->key.specified & AVTAB_XPERMS)
+        return node->datum.u.xperms == NULL;
+    if (!(node->key.specified & AVTAB_AV))
+        return false;
+    if (node->key.specified & AVTAB_AUDITDENY)
+        return node->datum.u.data == ~0U;
+    return node->datum.u.data == 0U;
+}
+
+static bool remove_avtab_node(struct policydb *db, struct avtab_node *node)
+{
+    int i;
+    int ret;
+    int shrink_size = sizeof(struct avtab_key) + sizeof(struct avtab_datum);
+    struct avtab removed = {};
+    struct avtab_node *n;
+    struct avtab_node *prev;
+
+    ret = avtab_alloc(&removed, 1);
+    if (ret < 0)
+        return false;
+
+    for (i = 0; i < db->te_avtab.nslot; i++) {
+        prev = NULL;
+        for (n = db->te_avtab.htable[i]; n; prev = n, n = n->next) {
+            if (n != node)
+                continue;
+
+            if (prev)
+                prev->next = n->next;
+            else
+                db->te_avtab.htable[i] = n->next;
+
+            if (db->te_avtab.nel > 0)
+                db->te_avtab.nel--;
+
+            if ((n->key.specified & AVTAB_XPERMS) && n->datum.u.xperms) {
+                shrink_size += sizeof(u8) + sizeof(u8) + sizeof(u32) * ARRAY_SIZE(n->datum.u.xperms->perms.p);
+            }
+            n->next = NULL;
+            removed.htable[0] = n;
+            removed.nel = 1;
+            avtab_destroy(&removed);
+            if (db->len >= shrink_size)
+                db->len -= shrink_size;
+            return true;
+        }
+    }
+
+    avtab_destroy(&removed);
+    return false;
+}
+
+static bool add_rule(struct policydb *db, const char *s, const char *t, const char *c, const char *p, int effect,
+                     bool invert)
 {
     struct type_datum *src = NULL, *tgt = NULL;
     struct class_datum *cls = NULL;
@@ -183,28 +237,27 @@ static bool add_rule(struct policydb *db, const char *s, const char *t,
             return false;
         }
     }
-    add_rule_raw(db, src, tgt, cls, perm, effect, invert);
-    return true;
+    return add_rule_raw(db, src, tgt, cls, perm, effect, invert);
 }
 
-static void add_rule_raw(struct policydb *db, struct type_datum *src,
-                         struct type_datum *tgt, struct class_datum *cls,
+static bool add_rule_raw(struct policydb *db, struct type_datum *src, struct type_datum *tgt, struct class_datum *cls,
                          struct perm_datum *perm, int effect, bool invert)
 {
+    bool success = true;
+
     if (src == NULL) {
         struct hashtab_node *node;
         if (strip_av(effect, invert)) {
             ksu_hashtab_for_each(db->p_types.table, node)
             {
-                add_rule_raw(db, (struct type_datum *)node->datum, tgt, cls,
-                             perm, effect, invert);
+                success &= add_rule_raw(db, (struct type_datum *)node->datum, tgt, cls, perm, effect, invert);
             };
         } else {
             ksu_hashtab_for_each(db->p_types.table, node)
             {
                 struct type_datum *type = (struct type_datum *)(node->datum);
                 if (type->attribute) {
-                    add_rule_raw(db, type, tgt, cls, perm, effect, invert);
+                    success &= add_rule_raw(db, type, tgt, cls, perm, effect, invert);
                 }
             };
         }
@@ -213,15 +266,14 @@ static void add_rule_raw(struct policydb *db, struct type_datum *src,
         if (strip_av(effect, invert)) {
             ksu_hashtab_for_each(db->p_types.table, node)
             {
-                add_rule_raw(db, src, (struct type_datum *)node->datum, cls,
-                             perm, effect, invert);
+                success &= add_rule_raw(db, src, (struct type_datum *)node->datum, cls, perm, effect, invert);
             };
         } else {
             ksu_hashtab_for_each(db->p_types.table, node)
             {
                 struct type_datum *type = (struct type_datum *)(node->datum);
                 if (type->attribute) {
-                    add_rule_raw(db, src, type, cls, perm, effect, invert);
+                    success &= add_rule_raw(db, src, type, cls, perm, effect, invert);
                 }
             };
         }
@@ -229,17 +281,27 @@ static void add_rule_raw(struct policydb *db, struct type_datum *src,
         struct hashtab_node *node;
         ksu_hashtab_for_each(db->p_classes.table, node)
         {
-            add_rule_raw(db, src, tgt, (struct class_datum *)node->datum, perm,
-                         effect, invert);
+            success &= add_rule_raw(db, src, tgt, (struct class_datum *)node->datum, perm, effect, invert);
         }
     } else {
         struct avtab_key key;
+        struct avtab_node *node;
+
         key.source_type = src->value;
         key.target_type = tgt->value;
         key.target_class = cls->value;
         key.specified = effect;
 
-        struct avtab_node *node = get_avtab_node(db, &key, NULL);
+        if (invert && effect != AVTAB_AUDITDENY) {
+            node = avtab_search_node(&db->te_avtab, &key);
+            if (!node)
+                return true;
+        } else {
+            node = get_avtab_node(db, &key, NULL);
+            if (!node)
+                return false;
+        }
+
         if (invert) {
             if (perm)
                 node->datum.u.data &= ~(1U << (perm->value - 1));
@@ -251,7 +313,11 @@ static void add_rule_raw(struct policydb *db, struct type_datum *src,
             else
                 node->datum.u.data = ~0U;
         }
+        if (is_redundant_avtab_node(node))
+            return remove_avtab_node(db, node);
     }
+
+    return success;
 }
 
 #define ioctl_driver(x) (x >> 8 & 0xFF)
@@ -261,10 +327,8 @@ static void add_rule_raw(struct policydb *db, struct type_datum *src,
 #define xperm_set(x, p) (p[x >> 5] |= (1 << (x & 0x1f)))
 #define xperm_clear(x, p) (p[x >> 5] &= ~(1 << (x & 0x1f)))
 
-static void add_xperm_rule_raw(struct policydb *db, struct type_datum *src,
-                               struct type_datum *tgt, struct class_datum *cls,
-                               uint16_t low, uint16_t high, int effect,
-                               bool invert)
+static void add_xperm_rule_raw(struct policydb *db, struct type_datum *src, struct type_datum *tgt,
+                               struct class_datum *cls, uint16_t low, uint16_t high, int effect, bool invert)
 {
     if (src == NULL) {
         struct hashtab_node *node;
@@ -272,8 +336,7 @@ static void add_xperm_rule_raw(struct policydb *db, struct type_datum *src,
         {
             struct type_datum *type = (struct type_datum *)(node->datum);
             if (type->attribute) {
-                add_xperm_rule_raw(db, type, tgt, cls, low, high, effect,
-                                   invert);
+                add_xperm_rule_raw(db, type, tgt, cls, low, high, effect, invert);
             }
         };
     } else if (tgt == NULL) {
@@ -282,17 +345,14 @@ static void add_xperm_rule_raw(struct policydb *db, struct type_datum *src,
         {
             struct type_datum *type = (struct type_datum *)(node->datum);
             if (type->attribute) {
-                add_xperm_rule_raw(db, src, type, cls, low, high, effect,
-                                   invert);
+                add_xperm_rule_raw(db, src, type, cls, low, high, effect, invert);
             }
         };
     } else if (cls == NULL) {
         struct hashtab_node *node;
         ksu_hashtab_for_each(db->p_classes.table, node)
         {
-            add_xperm_rule_raw(db, src, tgt,
-                               (struct class_datum *)(node->datum), low, high,
-                               effect, invert);
+            add_xperm_rule_raw(db, src, tgt, (struct class_datum *)(node->datum), low, high, effect, invert);
         };
     } else {
         struct avtab_key key;
@@ -338,8 +398,7 @@ static void add_xperm_rule_raw(struct policydb *db, struct type_datum *src,
         datum = &node->datum;
 
         if (datum->u.xperms == NULL) {
-            datum->u.xperms = (struct avtab_extended_perms *)(kzalloc(
-                sizeof(xperms), GFP_ATOMIC));
+            datum->u.xperms = (struct avtab_extended_perms *)(kzalloc(sizeof(xperms), GFP_KERNEL));
             if (!datum->u.xperms) {
                 pr_err("alloc xperms failed\n");
                 return;
@@ -349,9 +408,8 @@ static void add_xperm_rule_raw(struct policydb *db, struct type_datum *src,
     }
 }
 
-static bool add_xperm_rule(struct policydb *db, const char *s, const char *t,
-                           const char *c, const char *range, int effect,
-                           bool invert)
+static bool add_xperm_rule(struct policydb *db, const char *s, const char *t, const char *c, const char *range,
+                           int effect, bool invert)
 {
     struct type_datum *src = NULL, *tgt = NULL;
     struct class_datum *cls = NULL;
@@ -398,8 +456,7 @@ static bool add_xperm_rule(struct policydb *db, const char *s, const char *t,
     return true;
 }
 
-static bool add_type_rule(struct policydb *db, const char *s, const char *t,
-                          const char *c, const char *d, int effect)
+static bool add_type_rule(struct policydb *db, const char *s, const char *t, const char *c, const char *d, int effect)
 {
     struct type_datum *src, *tgt, *def;
     struct class_datum *cls;
@@ -432,6 +489,8 @@ static bool add_type_rule(struct policydb *db, const char *s, const char *t,
     key.specified = effect;
 
     struct avtab_node *node = get_avtab_node(db, &key, NULL);
+    if (!node)
+        return false;
     node->datum.u.data = def->value;
 
     return true;
@@ -479,9 +538,7 @@ static const struct hashtab_key_params filenametr_key_params = {
 };
 #endif
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
-static bool add_filename_trans(struct policydb *db, const char *s,
-                               const char *t, const char *c, const char *d,
+static bool add_filename_trans(struct policydb *db, const char *s, const char *t, const char *c, const char *d,
                                const char *o)
 {
     struct type_datum *src, *tgt, *def;
@@ -509,74 +566,75 @@ static bool add_filename_trans(struct policydb *db, const char *s,
     }
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
-    struct filename_trans ft;
-    struct filename_trans *new_ft = NULL;
-    struct filename_trans_datum *trans = NULL;
-    struct filename_trans_datum *new_trans = NULL;
-    int rc;
+    {
+        struct filename_trans ft;
+        struct filename_trans *new_ft = NULL;
+        struct filename_trans_datum *trans = NULL;
+        struct filename_trans_datum *new_trans = NULL;
+        int rc;
 
-    if (!db->filename_trans) {
-        pr_warn("filename_trans table is not initialized\n");
-        return false;
-    }
+        if (!db->filename_trans) {
+            pr_warn("filename_trans table is not initialized\n");
+            return false;
+        }
 
-    ft.stype = src->value;
-    ft.ttype = tgt->value;
-    ft.tclass = cls->value;
-    ft.name = o;
+        ft.stype = src->value;
+        ft.ttype = tgt->value;
+        ft.tclass = cls->value;
+        ft.name = o;
 
-    trans = hashtab_search(db->filename_trans, &ft);
-    if (trans) {
-        trans->otype = def->value;
-        return true;
-    }
-
-    new_trans =
-        (struct filename_trans_datum *)kzalloc(sizeof(*new_trans), GFP_ATOMIC);
-    new_ft = (struct filename_trans *)kzalloc(sizeof(*new_ft), GFP_ATOMIC);
-    if (!new_trans || !new_ft) {
-        kfree(new_trans);
-        kfree(new_ft);
-        return false;
-    }
-
-    *new_ft = ft;
-    new_ft->name = kstrdup(o, GFP_ATOMIC);
-    if (!new_ft->name) {
-        kfree(new_trans);
-        kfree(new_ft);
-        return false;
-    }
-
-    new_trans->otype = def->value;
-
-    rc = ebitmap_set_bit(&db->filename_trans_ttypes, new_ft->ttype, 1);
-    if (rc) {
-        kfree((void *)new_ft->name);
-        kfree(new_ft);
-        kfree(new_trans);
-        return false;
-    }
-
-    rc = hashtab_insert(db->filename_trans, new_ft, new_trans);
-    if (rc) {
-        if (rc == -EEXIST) {
-            trans = hashtab_search(db->filename_trans, &ft);
-            if (trans) {
-                trans->otype = def->value;
-            }
-            kfree((void *)new_ft->name);
-            kfree(new_ft);
-            kfree(new_trans);
+        trans = hashtab_search(db->filename_trans, &ft);
+        if (trans) {
+            trans->otype = def->value;
             return true;
         }
-        kfree((void *)new_ft->name);
-        kfree(new_ft);
-        kfree(new_trans);
-        return false;
-    }
 
-    return true;
+        new_trans = kzalloc(sizeof(*new_trans), GFP_KERNEL);
+        new_ft = kzalloc(sizeof(*new_ft), GFP_KERNEL);
+        if (!new_trans || !new_ft) {
+            kfree(new_trans);
+            kfree(new_ft);
+            return false;
+        }
+
+        *new_ft = ft;
+        new_ft->name = kstrdup(o, GFP_KERNEL);
+        if (!new_ft->name) {
+            kfree(new_trans);
+            kfree(new_ft);
+            return false;
+        }
+
+        new_trans->otype = def->value;
+
+        rc = ebitmap_set_bit(&db->filename_trans_ttypes, new_ft->ttype, 1);
+        if (rc) {
+            kfree(new_ft->name);
+            kfree(new_ft);
+            kfree(new_trans);
+            return false;
+        }
+
+        rc = hashtab_insert(db->filename_trans, new_ft, new_trans);
+        if (rc) {
+            if (rc == -EEXIST) {
+                trans = hashtab_search(db->filename_trans, &ft);
+                if (trans) {
+                    trans->otype = def->value;
+                }
+                kfree(new_ft->name);
+                kfree(new_ft);
+                kfree(new_trans);
+                return true;
+            }
+            kfree(new_ft->name);
+            kfree(new_ft);
+            kfree(new_trans);
+            return false;
+        }
+
+        return true;
+    }
 #else
     struct filename_trans_key key;
     key.ttype = tgt->value;
@@ -599,51 +657,35 @@ static bool add_filename_trans(struct policydb *db, const char *s,
     }
 
     if (trans == NULL) {
-        trans = (struct filename_trans_datum *)kcalloc(1, sizeof(*trans),
-                                                       GFP_ATOMIC);
-        struct filename_trans_key *new_key =
-            (struct filename_trans_key *)kzalloc(sizeof(*new_key), GFP_ATOMIC);
+        trans = (struct filename_trans_datum *)kcalloc(1, sizeof(*trans), GFP_KERNEL);
+        struct filename_trans_key *new_key = (struct filename_trans_key *)kzalloc(sizeof(*new_key), GFP_KERNEL);
         *new_key = key;
-        new_key->name = kstrdup(key.name, GFP_ATOMIC);
+        new_key->name = kstrdup(key.name, GFP_KERNEL);
         trans->next = last;
         trans->otype = def->value;
-        hashtab_insert(&db->filename_trans, new_key, trans,
-                       filenametr_key_params);
+        hashtab_insert(&db->filename_trans, new_key, trans, filenametr_key_params);
     }
 
     db->compat_filename_trans_count++;
     return ebitmap_set_bit(&trans->stypes, src->value - 1, 1) == 0;
 #endif
 }
-#else
-// Older kernels do not expose filename transition helpers; skip gracefully.
-static bool add_filename_trans(struct policydb *db, const char *s,
-                   const char *t, const char *c, const char *d,
-                   const char *o)
-{
-    pr_warn("filename trans compat not supported on this kernel\n");
-    return false;
-}
-#endif
 
-static bool add_genfscon(struct policydb *db, const char *fs_name,
-                         const char *path, const char *context)
+static bool add_genfscon(struct policydb *db, const char *fs_name, const char *path, const char *context)
 {
     return false;
 }
 
 // https://github.com/torvalds/linux/commit/590b9d576caec6b4c46bba49ed36223a399c3fc5#diff-cc9aa90e094e6e0f47bd7300db4f33cf4366b98b55d8753744f31eb69c691016R844-R845
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
-#define ksu_kvrealloc(p, new_size, _old_size) kvrealloc(p, new_size, GFP_ATOMIC)
+#define ksu_kvrealloc(p, new_size, _old_size) kvrealloc(p, new_size, GFP_KERNEL)
 // https://github.com/torvalds/linux/commit/de2860f4636256836450c6543be744a50118fc66#diff-fa19cdd9c3369d7f59aa2e8404628109408dbf8e1b568d1157a27328f75b8410R638-R652
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
-#define ksu_kvrealloc(p, new_size, old_size)                                   \
-    kvrealloc(p, old_size, new_size, GFP_ATOMIC)
+#define ksu_kvrealloc(p, new_size, old_size) kvrealloc(p, old_size, new_size, GFP_KERNEL)
 #else
 // https://cs.android.com/android/_/android/kernel/common/+/f5f3e54f811679761c33526e695bd296190faade
 // Some 5.10 kernel don't have this backport, so copy one.
-void *ksu_kvrealloc_compat(const void *p, size_t oldsize, size_t newsize,
-                           gfp_t flags)
+void *ksu_kvrealloc_compat(const void *p, size_t oldsize, size_t newsize, gfp_t flags)
 {
     void *newp;
 
@@ -656,8 +698,7 @@ void *ksu_kvrealloc_compat(const void *p, size_t oldsize, size_t newsize,
     kvfree(p);
     return newp;
 }
-#define ksu_kvrealloc(p, new_size, old_size)                                   \
-    ksu_kvrealloc_compat(p, old_size, new_size, GFP_ATOMIC)
+#define ksu_kvrealloc(p, new_size, old_size) ksu_kvrealloc_compat(p, old_size, new_size, GFP_KERNEL)
 #endif
 
 static bool add_type(struct policydb *db, const char *type_name, bool attr)
@@ -669,7 +710,7 @@ static bool add_type(struct policydb *db, const char *type_name, bool attr)
     }
 
     u32 value = ++db->p_types.nprim;
-    type = (struct type_datum *)kzalloc(sizeof(struct type_datum), GFP_ATOMIC);
+    type = (struct type_datum *)kzalloc(sizeof(struct type_datum), GFP_KERNEL);
     if (!type) {
         pr_err("add_type: alloc type_datum failed.\n");
         return false;
@@ -679,7 +720,7 @@ static bool add_type(struct policydb *db, const char *type_name, bool attr)
     type->value = value;
     type->attribute = attr;
 
-    char *key = kstrdup(type_name, GFP_ATOMIC);
+    char *key = kstrdup(type_name, GFP_KERNEL);
     if (!key) {
         pr_err("add_type: alloc key failed.\n");
         return false;
@@ -691,18 +732,15 @@ static bool add_type(struct policydb *db, const char *type_name, bool attr)
     }
 
     struct ebitmap *new_type_attr_map_array =
-        ksu_kvrealloc(db->type_attr_map_array, value * sizeof(struct ebitmap),
-                      (value - 1) * sizeof(struct ebitmap));
+        ksu_kvrealloc(db->type_attr_map_array, value * sizeof(struct ebitmap), (value - 1) * sizeof(struct ebitmap));
 
     if (!new_type_attr_map_array) {
         pr_err("add_type: alloc type_attr_map_array failed\n");
         return false;
     }
 
-    struct type_datum **new_type_val_to_struct =
-        ksu_kvrealloc(db->type_val_to_struct,
-                      sizeof(*db->type_val_to_struct) * value,
-                      sizeof(*db->type_val_to_struct) * (value - 1));
+    struct type_datum **new_type_val_to_struct = ksu_kvrealloc(
+        db->type_val_to_struct, sizeof(*db->type_val_to_struct) * value, sizeof(*db->type_val_to_struct) * (value - 1));
 
     if (!new_type_val_to_struct) {
         pr_err("add_type: alloc type_val_to_struct failed\n");
@@ -710,8 +748,7 @@ static bool add_type(struct policydb *db, const char *type_name, bool attr)
     }
 
     char **new_val_to_name_types =
-        ksu_kvrealloc(db->sym_val_to_name[SYM_TYPES], sizeof(char *) * value,
-                      sizeof(char *) * (value - 1));
+        ksu_kvrealloc(db->sym_val_to_name[SYM_TYPES], sizeof(char *) * value, sizeof(char *) * (value - 1));
     if (!new_val_to_name_types) {
         pr_err("add_type: alloc val_to_name failed\n");
         return false;
@@ -735,8 +772,7 @@ static bool add_type(struct policydb *db, const char *type_name, bool attr)
     return true;
 }
 
-static bool set_type_state(struct policydb *db, const char *type_name,
-                           bool permissive)
+static bool set_type_state(struct policydb *db, const char *type_name, bool permissive)
 {
     struct type_datum *type;
     if (type_name == NULL) {
@@ -761,8 +797,7 @@ static bool set_type_state(struct policydb *db, const char *type_name,
     return true;
 }
 
-static void add_typeattribute_raw(struct policydb *db, struct type_datum *type,
-                                  struct type_datum *attr)
+static void add_typeattribute_raw(struct policydb *db, struct type_datum *type, struct type_datum *attr)
 {
     struct ebitmap *sattr = &db->type_attr_map_array[type->value - 1];
     ebitmap_set_bit(sattr, attr->value - 1, 1);
@@ -775,8 +810,7 @@ static void add_typeattribute_raw(struct policydb *db, struct type_datum *type,
         struct class_datum *cls = (struct class_datum *)(node->datum);
         for (n = cls->constraints; n; n = n->next) {
             for (e = n->expr; e; e = e->next) {
-                if (e->expr_type == CEXPR_NAMES &&
-                    ebitmap_get_bit(&e->type_names->types, attr->value - 1)) {
+                if (e->expr_type == CEXPR_NAMES && ebitmap_get_bit(&e->type_names->types, attr->value - 1)) {
                     ebitmap_set_bit(&e->names, type->value - 1, 1);
                 }
             }
@@ -784,8 +818,7 @@ static void add_typeattribute_raw(struct policydb *db, struct type_datum *type,
     };
 }
 
-static bool add_typeattribute(struct policydb *db, const char *type,
-                              const char *attr)
+static bool add_typeattribute(struct policydb *db, const char *type, const char *attr)
 {
     struct type_datum *type_d = symtab_search(&db->p_types, type);
     if (type_d == NULL) {
@@ -843,54 +876,44 @@ bool ksu_exists(struct policydb *db, const char *type)
 }
 
 // Access vector rules
-bool ksu_allow(struct policydb *db, const char *src, const char *tgt,
-               const char *cls, const char *perm)
+bool ksu_allow(struct policydb *db, const char *src, const char *tgt, const char *cls, const char *perm)
 {
     return add_rule(db, src, tgt, cls, perm, AVTAB_ALLOWED, false);
 }
 
-bool ksu_deny(struct policydb *db, const char *src, const char *tgt,
-              const char *cls, const char *perm)
+bool ksu_deny(struct policydb *db, const char *src, const char *tgt, const char *cls, const char *perm)
 {
     return add_rule(db, src, tgt, cls, perm, AVTAB_ALLOWED, true);
 }
 
-bool ksu_auditallow(struct policydb *db, const char *src, const char *tgt,
-                    const char *cls, const char *perm)
+bool ksu_auditallow(struct policydb *db, const char *src, const char *tgt, const char *cls, const char *perm)
 {
     return add_rule(db, src, tgt, cls, perm, AVTAB_AUDITALLOW, false);
 }
-bool ksu_dontaudit(struct policydb *db, const char *src, const char *tgt,
-                   const char *cls, const char *perm)
+bool ksu_dontaudit(struct policydb *db, const char *src, const char *tgt, const char *cls, const char *perm)
 {
     return add_rule(db, src, tgt, cls, perm, AVTAB_AUDITDENY, true);
 }
 
 // Extended permissions access vector rules
-bool ksu_allowxperm(struct policydb *db, const char *src, const char *tgt,
-                    const char *cls, const char *range)
+bool ksu_allowxperm(struct policydb *db, const char *src, const char *tgt, const char *cls, const char *range)
 {
-    return add_xperm_rule(db, src, tgt, cls, range, AVTAB_XPERMS_ALLOWED,
-                          false);
+    return add_xperm_rule(db, src, tgt, cls, range, AVTAB_XPERMS_ALLOWED, false);
 }
 
-bool ksu_auditallowxperm(struct policydb *db, const char *src, const char *tgt,
-                         const char *cls, const char *range)
+bool ksu_auditallowxperm(struct policydb *db, const char *src, const char *tgt, const char *cls, const char *range)
 {
-    return add_xperm_rule(db, src, tgt, cls, range, AVTAB_XPERMS_AUDITALLOW,
-                          false);
+    return add_xperm_rule(db, src, tgt, cls, range, AVTAB_XPERMS_AUDITALLOW, false);
 }
 
-bool ksu_dontauditxperm(struct policydb *db, const char *src, const char *tgt,
-                        const char *cls, const char *range)
+bool ksu_dontauditxperm(struct policydb *db, const char *src, const char *tgt, const char *cls, const char *range)
 {
-    return add_xperm_rule(db, src, tgt, cls, range, AVTAB_XPERMS_DONTAUDIT,
-                          false);
+    return add_xperm_rule(db, src, tgt, cls, range, AVTAB_XPERMS_DONTAUDIT, false);
 }
 
 // Type rules
-bool ksu_type_transition(struct policydb *db, const char *src, const char *tgt,
-                         const char *cls, const char *def, const char *obj)
+bool ksu_type_transition(struct policydb *db, const char *src, const char *tgt, const char *cls, const char *def,
+                         const char *obj)
 {
     if (obj) {
         return add_filename_trans(db, src, tgt, cls, def, obj);
@@ -899,21 +922,198 @@ bool ksu_type_transition(struct policydb *db, const char *src, const char *tgt,
     }
 }
 
-bool ksu_type_change(struct policydb *db, const char *src, const char *tgt,
-                     const char *cls, const char *def)
+bool ksu_type_change(struct policydb *db, const char *src, const char *tgt, const char *cls, const char *def)
 {
     return add_type_rule(db, src, tgt, cls, def, AVTAB_CHANGE);
 }
 
-bool ksu_type_member(struct policydb *db, const char *src, const char *tgt,
-                     const char *cls, const char *def)
+bool ksu_type_member(struct policydb *db, const char *src, const char *tgt, const char *cls, const char *def)
 {
     return add_type_rule(db, src, tgt, cls, def, AVTAB_MEMBER);
 }
 
 // File system labeling
-bool ksu_genfscon(struct policydb *db, const char *fs_name, const char *path,
-                  const char *ctx)
+bool ksu_genfscon(struct policydb *db, const char *fs_name, const char *path, const char *ctx)
 {
     return add_genfscon(db, fs_name, path, ctx);
 }
+
+// ======== sepolicy ========
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
+void ksu_destroy_sepolicy(struct selinux_policy *pol)
+{
+    policydb_destroy(&pol->policydb);
+    kfree(pol);
+}
+
+struct selinux_policy *ksu_dup_sepolicy(struct selinux_policy *old_pol)
+{
+    int ret;
+    size_t len;
+    struct selinux_policy *new_pol;
+    void *data;
+    struct policy_file fp;
+
+    len = old_pol->policydb.len;
+    data = vmalloc(len);
+    if (!data) {
+        pr_err("alloc policy len %ld\n", len);
+        ret = -ENOMEM;
+        goto out_free_data;
+    }
+
+    fp.data = data;
+    fp.len = len;
+
+    ret = policydb_write(&old_pol->policydb, &fp);
+    if (ret) {
+        pr_err("sepolicy: policydb_write: %d\n", ret);
+        goto out_free_data;
+    }
+
+    // https://android-review.googlesource.com/c/kernel/common/+/3009995/11/security/selinux/ss/policydb.c
+    // fixup config
+    // 4*2+8+4
+    static const size_t kConfigOff = 20;
+    if (len >= kConfigOff + sizeof(u32)) {
+        u32 *config_ptr = (u32 *)((unsigned long)data + kConfigOff);
+        pr_info("old config: %u\n", *config_ptr);
+        if (old_pol->policydb.android_netlink_route) {
+            pr_info("adding POLICYDB_CONFIG_ANDROID_NETLINK_ROUTE\n");
+            *config_ptr |= POLICYDB_CONFIG_ANDROID_NETLINK_ROUTE;
+        }
+        if (old_pol->policydb.android_netlink_getneigh) {
+            pr_info("adding POLICYDB_CONFIG_ANDROID_NETLINK_GETNEIGH\n");
+            *config_ptr |= POLICYDB_CONFIG_ANDROID_NETLINK_GETNEIGH;
+        }
+        pr_info("new config: %u\n", *config_ptr);
+    }
+
+    new_pol = kmemdup(old_pol, sizeof(*old_pol), GFP_KERNEL);
+    if (!new_pol) {
+        ret = -ENOMEM;
+        pr_err("sepolicy: dup old pol\n");
+        goto out_free_data;
+    }
+    memset(&new_pol->policydb, 0, sizeof(new_pol->policydb));
+
+    // rewind fp
+    fp.data = data;
+    fp.len = len;
+
+    ret = policydb_read(&new_pol->policydb, &fp);
+    if (ret) {
+        pr_err("sepolicy: policydb_read: %d\n", ret);
+        goto out_free_policydb;
+    }
+    new_pol->policydb.len = old_pol->policydb.len;
+    kvfree(data);
+
+    return new_pol;
+
+out_free_policydb:
+    kfree(new_pol);
+
+out_free_data:
+    kvfree(data);
+
+    return ERR_PTR(ret);
+}
+#else
+void ksu_destroy_selinux_ss(struct selinux_ss *ss)
+{
+    if (!ss)
+        return;
+
+    if (ss->sidtab) {
+        sidtab_destroy(ss->sidtab);
+        kfree(ss->sidtab);
+    }
+    policydb_destroy(&ss->policydb);
+    kfree(ss->map.mapping);
+    kfree(ss);
+}
+
+struct selinux_ss *ksu_dup_selinux_ss(struct selinux_ss *old_ss)
+{
+    int ret;
+    size_t len;
+    struct selinux_ss *new_ss;
+    void *data;
+    struct policy_file fp;
+
+    len = old_ss->policydb.len;
+    data = vmalloc(len);
+    if (!data) {
+        ret = -ENOMEM;
+        goto out_free_data;
+    }
+
+    fp.data = data;
+    fp.len = len;
+
+    ret = policydb_write(&old_ss->policydb, &fp);
+    if (ret) {
+        pr_err("sepolicy: policydb_write: %d\n", ret);
+        goto out_free_data;
+    }
+
+    new_ss = kzalloc(sizeof(*new_ss), GFP_KERNEL);
+    if (!new_ss) {
+        ret = -ENOMEM;
+        goto out_free_data;
+    }
+
+    rwlock_init(&new_ss->policy_rwlock);
+    mutex_init(&new_ss->status_lock);
+    new_ss->latest_granting = old_ss->latest_granting;
+    new_ss->map.size = old_ss->map.size;
+    if (old_ss->map.size && old_ss->map.mapping) {
+        new_ss->map.mapping = kmemdup(old_ss->map.mapping,
+                                      sizeof(*old_ss->map.mapping) * old_ss->map.size,
+                                      GFP_KERNEL);
+        if (!new_ss->map.mapping) {
+            ret = -ENOMEM;
+            goto out_free_ss;
+        }
+    }
+
+    fp.data = data;
+    fp.len = len;
+
+    ret = policydb_read(&new_ss->policydb, &fp);
+    if (ret) {
+        pr_err("sepolicy: policydb_read: %d\n", ret);
+        goto out_destroy_policydb;
+    }
+    new_ss->policydb.len = old_ss->policydb.len;
+
+    new_ss->sidtab = kzalloc(sizeof(*new_ss->sidtab), GFP_KERNEL);
+    if (!new_ss->sidtab) {
+        ret = -ENOMEM;
+        goto out_destroy_policydb;
+    }
+
+    ret = policydb_load_isids(&new_ss->policydb, new_ss->sidtab);
+    if (ret) {
+        pr_err("sepolicy: policydb_load_isids: %d\n", ret);
+        goto out_free_sidtab;
+    }
+
+    kvfree(data);
+    return new_ss;
+
+out_free_sidtab:
+    kfree(new_ss->sidtab);
+out_destroy_policydb:
+    policydb_destroy(&new_ss->policydb);
+out_free_ss:
+    kfree(new_ss->map.mapping);
+    kfree(new_ss);
+out_free_data:
+    kvfree(data);
+
+    return ERR_PTR(ret);
+}
+#endif

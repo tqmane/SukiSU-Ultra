@@ -1,19 +1,19 @@
 menu "KernelSU"
 
 config KSU
-    tristate "KernelSU function support"
-    default y
-    help
-      Enable kernel-level root privileges on Android System.
-      To compile as a module, choose M here: the
-      module will be called kernelsu.
+	tristate "KernelSU function support"
+	default y
+	help
+	  Enable kernel-level root privileges on Android System.
+	  To compile as a module, choose M here: the
+	  module will be called kernelsu.
 
 config KSU_DEBUG
-    bool "KernelSU debug mode"
-    depends on KSU
-    default n
-    help
-      Enable KernelSU debug mode.
+	bool "KernelSU debug mode"
+	depends on KSU
+	default n
+	help
+	  Enable KernelSU debug mode.
 
 config KSU_MANUAL_SU
     bool "Use manual su"
@@ -23,12 +23,13 @@ config KSU_MANUAL_SU
       Use manual su and authorize the corresponding command line and application via prctl
 
 config KSU_MANUAL_HOOK
-    bool "Use manual hooks for syscalls"
-    depends on KSU
-    default n
-    help
-      Enable manual hooks for syscalls instead of relying on auto-hooking.
-      Required for ReSukiSU integration on older kernels or custom configurations.
+	bool "Use manual hooks for syscalls"
+	depends on KSU
+	default n
+	help
+	  Enable downstream syscall hook callsites in the 5.4 kernel tree.
+	  This is required for GKI 1.0 devices where automatic syscall table
+	  redirection is not the primary integration mechanism.
 
 config KPM
     bool "Enable SukiSU KPM"
@@ -41,114 +42,107 @@ config KPM
     select KALLSYMS
     select KALLSYMS_ALL
 
+config KSU_DISABLE_MANAGER
+	bool "Disable KernelSU manager integration"
+	depends on KSU
+	default n
+	help
+	  Disable manager APK detection and manager-specific handling.
+	  Root will be used in place of manager-only functionality.
+
+config KSU_DISABLE_POLICY
+	bool "Disable KernelSU policy profiles"
+	depends on KSU
+	default n
+	help
+	  Disable per-app root/non-root profile customization.
+	  Escalation will always use the default full root profile, and
+	  non-root handling will follow the global umount policy only.
+
 menu "KernelSU - SUSFS"
 
 config KSU_SUSFS
-    bool "KernelSU addon - SUSFS"
-    depends on KSU
-    default y
-    help
-      Integrate SUSFS into the kernel and expose its control interface via prctl.
+	bool "KernelSU addon - SUSFS"
+	depends on KSU
+	default y
+	help
+	  Integrate SUSFS into the kernel and expose its control interface
+	  through KernelSU supercalls.
 
 config KSU_SUSFS_SUS_PATH
-    bool "Enable to hide suspicious path"
-    depends on KSU_SUSFS
-    default y
-    help
-      Hide user-defined paths (and sub-paths) from various VFS lookups.
+	bool "Enable to hide suspicious path"
+	depends on KSU_SUSFS
+	default y
 
 config KSU_SUSFS_SUS_MOUNT
-    bool "Enable to hide suspicious mounts"
-    depends on KSU_SUSFS
-    default y
-    help
-      Hide user-defined mount paths from /proc/*/mounts and reorder mount IDs for
-      processes spawned from zygote.
+	bool "Enable to hide suspicious mounts"
+	depends on KSU_SUSFS
+	default y
 
 config KSU_SUSFS_SUS_KSTAT
-    bool "Enable to spoof suspicious kstat"
-    depends on KSU_SUSFS
-    default y
-    help
-      Spoof stat() information (ino/dev/nlink/size/blocks/time) for user-defined
-      file/directory paths.
+	bool "Enable to spoof suspicious kstat"
+	depends on KSU_SUSFS
+	default y
 
 config KSU_SUSFS_TRY_UMOUNT
-    bool "Enable SUSFS try_umount"
-    depends on KSU_SUSFS
-    default y
-    help
-      Allow userspace to register mount paths to be unmounted for NO-root apps.
+	bool "Enable SUSFS try_umount"
+	depends on KSU_SUSFS
+	default y
 
 config KSU_SUSFS_SPOOF_UNAME
-    bool "Enable to spoof uname"
-    depends on KSU_SUSFS
-    default y
-    help
-      Spoof uname(2) release/version strings for all processes.
+	bool "Enable to spoof uname"
+	depends on KSU_SUSFS
+	default y
 
 config KSU_SUSFS_ENABLE_LOG
-    bool "Enable SUSFS kernel logging"
-    depends on KSU_SUSFS
-    default y
-    help
-      Enable SUSFS logging. Disable to completely silence SUSFS logs.
+	bool "Enable SUSFS kernel logging"
+	depends on KSU_SUSFS
+	default y
 
 config KSU_SUSFS_SUS_SU
-    bool "Enable SUS-SU in runtime temporarily (experimental)"
-    depends on KSU_SUSFS && OVERLAY_FS
-    default n
-    help
-      Experimental: enable/disable SUS-SU support. Not required for SUSFS core
-      hiding/spoofing features.
+	bool "Enable SUS-SU in runtime temporarily"
+	depends on KSU_SUSFS && OVERLAY_FS
+	default n
 
 config KSU_SUSFS_OPEN_REDIRECT
-    bool "Enavle to spoof open redirect"
-    depends on KSU_SUSFS
-    default y
-    help
-        Redirect user-defined file paths to alternative locations.
+	bool "Enable open redirect spoofing"
+	depends on KSU_SUSFS
+	default y
 
 config KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
-    bool "Enable to spoof /proc/cmdline or /proc/bootconfig"
-    depends on KSU_SUSFS
-    default y
-    help
-        Spoof kernel command line or bootconfig via userspace control.
+	bool "Enable to spoof /proc/cmdline or /proc/bootconfig"
+	depends on KSU_SUSFS
+	default y
 
 config KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT
-    bool "Auto add suspicious bind mount"
-    depends on KSU_SUSFS_SUS_MOUNT
-    default y
+	bool "Auto add suspicious bind mount"
+	depends on KSU_SUSFS_SUS_MOUNT
+	default y
 
 config KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT
-    bool "Auto add suspicious KSU default mount"
-    depends on KSU_SUSFS_SUS_MOUNT
-    default y
+	bool "Auto add suspicious KSU default mount"
+	depends on KSU_SUSFS_SUS_MOUNT
+	default y
 
 config KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT
-    bool "Auto add try umount for bind mount"
-    depends on KSU_SUSFS_TRY_UMOUNT
-    default y
+	bool "Auto add try_umount for bind mount"
+	depends on KSU_SUSFS_TRY_UMOUNT
+	default y
 
 config KSU_SUSFS_HAS_MAGIC_MOUNT
-    bool "Enable support for magic mount"
-    depends on KSU_SUSFS
-    default y
+	bool "Enable support for magic mount"
+	depends on KSU_SUSFS
+	default y
 
 config KSU_SUSFS_SUS_MAP
-    bool "Enable to spoof memory mapping"
-    depends on KSU_SUSFS
-    default y
-    help
-        Spoof memory mappings in /proc/[pid]/maps and /proc/[pid]/smaps
+	bool "Enable to spoof memory mapping"
+	depends on KSU_SUSFS
+	default y
 
 config KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
-    bool "Hide KSU and SUSFS kernel symbols"
-    depends on KSU_SUSFS && KALLSYMS
-    default y
-    help
-        Hide KSU and SUSFS related symbols from /proc/kallsyms
+	bool "Hide KSU and SUSFS kernel symbols"
+	depends on KSU_SUSFS && KALLSYMS
+	default y
 
 endmenu
 
